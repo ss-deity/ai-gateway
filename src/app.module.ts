@@ -2,21 +2,23 @@ import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
+import { UploadModule } from './upload/upload.module.js';
 import { User, Conversation, Message } from './entities/index.js';
 
 @Module({
   imports: [
     TypeOrmModule.forRoot({
       type: 'mysql',
-      host: process.env.DB_HOST || '114.55.30.207',
+      host: process.env.DB_HOST || 'localhost',
       port: Number(process.env.DB_PORT) || 3306,
       username: process.env.DB_USER || 'root',
-      password: process.env.DB_PASSWORD || 'ChatAI@2026',
+      password: process.env.DB_PASSWORD || '',
       database: process.env.DB_NAME || 'chat_ai',
       entities: [User, Conversation, Message],
-      synchronize: true, // 开发环境自动同步表结构，生产环境应关闭
+      synchronize: true,
     }),
     TypeOrmModule.forFeature([User, Conversation, Message]),
+    UploadModule,
   ],
   controllers: [AppController],
   providers: [AppService],

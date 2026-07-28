@@ -1,4 +1,4 @@
-import { Controller, Get, Post, Body, Res, Param, Query } from '@nestjs/common';
+import { Controller, Get, Post, Body, Res, Param, Query, Delete, Put } from '@nestjs/common';
 import type { Response } from 'express';
 import { AppService } from './app.service';
 
@@ -42,7 +42,7 @@ export class AppController {
         user: {
           id: String(result.id),
           username: result.username,
-          avatar: '',
+          avatar: result.avatar || '',
         },
       },
     };
@@ -74,8 +74,68 @@ export class AppController {
         user: {
           id: String(user.id),
           username: user.username,
-          avatar: '',
+          avatar: user.avatar || '',
         },
+      },
+    };
+  }
+
+  /**
+   * 退出登录接口
+   * POST /auth/logout
+   */
+  @Post('auth/logout')
+  async logout() {
+    return { code: 0, message: '退出成功', data: null };
+  }
+
+  /**
+   * 获取用户信息
+   * GET /users/:id
+   */
+  @Get('users/:id')
+  async getUser(@Param('id') id: string) {
+    const user = await this.appService.getUserById(Number(id));
+    if (!user) {
+      return { code: -1, message: '用户不存在', data: null };
+    }
+    return {
+      code: 0,
+      message: 'success',
+      data: {
+        id: String(user.id),
+        username: user.username,
+        avatar: user.avatar || '',
+      },
+    };
+  }
+
+  /**
+   * 更新用户信息（用户名、头像）
+   * PUT /users/:id
+   */
+  @Put('users/:id')
+  async updateUser(
+    @Param('id') id: string,
+    @Body() body: { username?: string; avatar?: string },
+  ) {
+    const { user, conflict } = await this.appService.updateUser(
+      Number(id),
+      body,
+    );
+    if (conflict) {
+      return { code: -1, message: '用户名已被占用', data: null };
+    }
+    if (!user) {
+      return { code: -1, message: '用户不存在', data: null };
+    }
+    return {
+      code: 0,
+      message: 'success',
+      data: {
+        id: String(user.id),
+        username: user.username,
+        avatar: user.avatar || '',
       },
     };
   }
@@ -155,6 +215,18 @@ export class AppController {
   @Get('conversations/:id/messages')
   async getMessages(@Param('id') id: string) {
     return this.appService.getMessages(Number(id));
+  }
+
+  /**
+   * 删除会话（连同其所有消息）
+   */
+  @Delete('conversations/:id')
+  async deleteConversation(@Param('id') id: string) {
+    const success = await this.appService.deleteConversation(Number(id));
+    if (!success) {
+      return { code: -1, message: '会话不存在', data: null };
+    }
+    return { code: 0, message: 'success', data: null };
   }
 
   @Post('chat/pause/:sessionId')

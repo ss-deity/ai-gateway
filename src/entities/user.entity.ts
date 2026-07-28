@@ -22,6 +22,9 @@ export class User {
   @Column({ length: 255, nullable: true })
   email!: string;
 
+  @Column({ length: 500, nullable: true })
+  avatar!: string;
+
   @CreateDateColumn()
   createdAt!: Date;
 

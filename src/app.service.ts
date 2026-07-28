@@ -7,7 +7,7 @@ import { User } from './entities/user.entity.js';
 import { Conversation } from './entities/conversation.entity.js';
 import { Message } from './entities/message.entity.js';
 
-const JWT_SECRET = process.env.JWT_SECRET || 'chatai_jwt_secret_2026';
+const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-env';
 
 export interface StreamCallbacks {
   onToken: (token: string) => void;
@@ -26,8 +26,8 @@ interface SessionState {
 @Injectable()
 export class AppService {
   private readonly client = new OpenAI({
-    apiKey: 'sk-664a40277262463cabca0f9aa2c6a2d8',
-    baseURL: 'https://api.deepseek.com',
+    apiKey: process.env.DEEPSEEK_API_KEY || '',
+    baseURL: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
   });
 
   private sessions = new Map<string, SessionState>();
@@ -137,6 +137,41 @@ export class AppService {
   }
 
   /**
+   * 更新用户信息（用户名、头像）
+   * - 用户名冲突时返回 { user: null, conflict: true }
+   * - 用户不存在返回 { user: null, conflict: false }
+   */
+  async updateUser(
+    id: number,
+    patch: { username?: string; avatar?: string },
+  ): Promise<{ user: User | null; conflict: boolean }> {
+    const user = await this.userRepo.findOne({ where: { id } });
+    if (!user) {
+      return { user: null, conflict: false };
+    }
+
+    if (patch.username !== undefined) {
+      const nextName = patch.username.trim();
+      if (nextName && nextName !== user.username) {
+        const existing = await this.userRepo.findOne({
+          where: { username: nextName },
+        });
+        if (existing && existing.id !== id) {
+          return { user: null, conflict: true };
+        }
+        user.username = nextName;
+      }
+    }
+
+    if (patch.avatar !== undefined) {
+      user.avatar = patch.avatar;
+    }
+
+    const saved = await this.userRepo.save(user);
+    return { user: saved, conflict: false };
+  }
+
+  /**
    * 获取或创建默认用户（开发阶段用）
    */
   async getDefaultUser(): Promise<User> {
@@ -189,6 +224,21 @@ export class AppService {
       where: { conversationId },
       order: { createdAt: 'ASC' },
     });
+  }
+
+  /**
+   * 删除会话及其所有消息
+   */
+  async deleteConversation(conversationId: number): Promise<boolean> {
+    const conversation = await this.conversationRepo.findOne({
+      where: { id: conversationId },
+    });
+    if (!conversation) {
+      return false;
+    }
+    await this.messageRepo.delete({ conversationId });
+    await this.conversationRepo.delete({ id: conversationId });
+    return true;
   }
 
   async chatStream(
