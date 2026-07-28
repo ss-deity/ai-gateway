@@ -41,7 +41,9 @@ export class AppController {
         token,
         user: {
           id: String(result.id),
+          uid: result.uid,
           username: result.username,
+          nickname: result.nickname || result.username,
           avatar: result.avatar || '',
         },
       },
@@ -73,7 +75,9 @@ export class AppController {
         token,
         user: {
           id: String(user.id),
+          uid: user.uid,
           username: user.username,
+          nickname: user.nickname || user.username,
           avatar: user.avatar || '',
         },
       },
@@ -104,28 +108,28 @@ export class AppController {
       message: 'success',
       data: {
         id: String(user.id),
+        uid: user.uid,
         username: user.username,
+        nickname: user.nickname || user.username,
         avatar: user.avatar || '',
       },
     };
   }
 
   /**
-   * 更新用户信息（用户名、头像）
+   * 更新用户信息（仅名称 nickname 和头像 avatar）
    * PUT /users/:id
+   * 说明：登录账号 username 不允许通过此接口修改。
    */
   @Put('users/:id')
   async updateUser(
     @Param('id') id: string,
-    @Body() body: { username?: string; avatar?: string },
+    @Body() body: { nickname?: string; avatar?: string },
   ) {
-    const { user, conflict } = await this.appService.updateUser(
-      Number(id),
-      body,
-    );
-    if (conflict) {
-      return { code: -1, message: '用户名已被占用', data: null };
-    }
+    const user = await this.appService.updateUser(Number(id), {
+      nickname: body.nickname,
+      avatar: body.avatar,
+    });
     if (!user) {
       return { code: -1, message: '用户不存在', data: null };
     }
@@ -134,7 +138,9 @@ export class AppController {
       message: 'success',
       data: {
         id: String(user.id),
+        uid: user.uid,
         username: user.username,
+        nickname: user.nickname || user.username,
         avatar: user.avatar || '',
       },
     };

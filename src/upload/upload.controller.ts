@@ -1,4 +1,4 @@
-import { Controller, Post, UploadedFile, UseInterceptors, Param } from '@nestjs/common';
+import { Controller, Post, UploadedFile, UseInterceptors, Param, Query } from '@nestjs/common';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { UploadService } from './upload.service.js';
 
@@ -15,19 +15,26 @@ export class UploadController {
   constructor(private readonly uploadService: UploadService) {}
 
   /**
-   * 上传文件到百度 BOS
-   * POST /upload
+   * 通用上传：写入该用户 BOS 目录下的 dir 子目录（缺省为根目录），保留原始文件名
+   * POST /upload?userId=<numericUserId>&dir=<相对路径>
    * Content-Type: multipart/form-data
    * field: file
    */
   @Post()
   @UseInterceptors(FileInterceptor('file'))
-  async uploadFile(@UploadedFile() file: Express.Multer.File) {
+  async uploadFile(
+    @UploadedFile() file: Express.Multer.File,
+    @Query('userId') userId?: string,
+    @Query('dir') dir?: string,
+  ) {
     if (!file) {
       return { code: -1, message: '请选择文件', data: null };
     }
+    if (!userId) {
+      return { code: -1, message: '缺少 userId', data: null };
+    }
 
-    const url = await this.uploadService.uploadToBos(file);
+    const url = await this.uploadService.uploadToBos(file, Number(userId), dir);
     return {
       code: 0,
       message: 'success',
@@ -39,6 +46,7 @@ export class UploadController {
    * 上传头像并更新用户信息
    * POST /upload/avatar/:userId
    * 限制：jpg / jpeg / png / webp，≤ 5MB
+   * 存储位置：users/<uid>/avatar/<ts>.<ext>
    */
   @Post('avatar/:userId')
   @UseInterceptors(FileInterceptor('file'))

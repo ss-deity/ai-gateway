@@ -1,11 +1,13 @@
-import { Injectable } from '@nestjs/common';
+import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { randomUUID } from 'crypto';
 import OpenAI from 'openai';
 import * as jwt from 'jsonwebtoken';
 import { User } from './entities/user.entity.js';
 import { Conversation } from './entities/conversation.entity.js';
 import { Message } from './entities/message.entity.js';
+import { UploadService } from './upload/upload.service.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-env';
 
@@ -25,6 +27,7 @@ interface SessionState {
 
 @Injectable()
 export class AppService {
+  private readonly logger = new Logger(AppService.name);
   private readonly client = new OpenAI({
     apiKey: process.env.DEEPSEEK_API_KEY || '',
     baseURL: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
@@ -40,6 +43,7 @@ export class AppService {
     private readonly conversationRepo: Repository<Conversation>,
     @InjectRepository(Message)
     private readonly messageRepo: Repository<Message>,
+    private readonly uploadService: UploadService,
   ) {}
 
   getHello(): string {
@@ -104,19 +108,41 @@ export class AppService {
   }
 
   /**
-   * 注册用户
+   * 注册用户：
+   *   - 生成稳定的业务 uid（UUID）
+   *   - nickname 默认与登录账号一致
+   *   - 注册成功后异步为该用户在 BOS 创建独立目录 users/<uid>/
    */
   async register(username: string, password: string): Promise<User | null> {
     const existing = await this.userRepo.findOne({ where: { username } });
     if (existing) {
       return null;
     }
-    const user = this.userRepo.create({ username, password, email: '' });
-    return this.userRepo.save(user);
+    const user = this.userRepo.create({
+      username,
+      nickname: username,
+      password,
+      email: '',
+      uid: randomUUID(),
+    });
+    const saved = await this.userRepo.save(user);
+
+    // 为新用户创建 BOS 独立存储目录；失败不阻断注册，仅记录日志，
+    // 后续用户首次上传时如果目录仍不存在会自动创建（uploadService 内部靠 prefix 生效）。
+    try {
+      await this.uploadService.createUserFolder(saved.uid);
+    } catch (err) {
+      this.logger.warn(
+        `注册后创建 BOS 用户目录失败 uid=${saved.uid}: ${(err as Error).message}`,
+      );
+    }
+
+    return saved;
   }
 
   /**
-   * 用户登录：验证账号密码
+   * 用户登录：验证账号密码。
+   * 兼容旧数据：若该用户没有 uid（老账号），登录时补发一个并异步创建 BOS 目录。
    */
   async login(username: string, password: string): Promise<User | null> {
     const user = await this.userRepo.findOne({ where: { username } });
@@ -125,6 +151,18 @@ export class AppService {
     }
     if (user.password !== password) {
       return null;
+    }
+    // 老账号补 uid
+    if (!user.uid) {
+      user.uid = randomUUID();
+      await this.userRepo.save(user);
+      try {
+        await this.uploadService.createUserFolder(user.uid);
+      } catch (err) {
+        this.logger.warn(
+          `为老账号补建 BOS 目录失败 uid=${user.uid}: ${(err as Error).message}`,
+        );
+      }
     }
     return user;
   }
@@ -137,29 +175,21 @@ export class AppService {
   }
 
   /**
-   * 更新用户信息（用户名、头像）
-   * - 用户名冲突时返回 { user: null, conflict: true }
-   * - 用户不存在返回 { user: null, conflict: false }
+   * 更新用户信息（仅名称 nickname 和头像 avatar；登录账号 username 不可修改）
    */
   async updateUser(
     id: number,
-    patch: { username?: string; avatar?: string },
-  ): Promise<{ user: User | null; conflict: boolean }> {
+    patch: { nickname?: string; avatar?: string },
+  ): Promise<User | null> {
     const user = await this.userRepo.findOne({ where: { id } });
     if (!user) {
-      return { user: null, conflict: false };
+      return null;
     }
 
-    if (patch.username !== undefined) {
-      const nextName = patch.username.trim();
-      if (nextName && nextName !== user.username) {
-        const existing = await this.userRepo.findOne({
-          where: { username: nextName },
-        });
-        if (existing && existing.id !== id) {
-          return { user: null, conflict: true };
-        }
-        user.username = nextName;
+    if (patch.nickname !== undefined) {
+      const nextName = patch.nickname.trim();
+      if (nextName) {
+        user.nickname = nextName;
       }
     }
 
@@ -167,8 +197,7 @@ export class AppService {
       user.avatar = patch.avatar;
     }
 
-    const saved = await this.userRepo.save(user);
-    return { user: saved, conflict: false };
+    return this.userRepo.save(user);
   }
 
   /**
