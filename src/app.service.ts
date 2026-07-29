@@ -2,17 +2,18 @@ import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
-import OpenAI from 'openai';
 import * as jwt from 'jsonwebtoken';
 import { User } from './entities/user.entity.js';
 import { Conversation } from './entities/conversation.entity.js';
 import { Message } from './entities/message.entity.js';
 import { UploadService } from './upload/upload.service.js';
+import { ModelsService } from './models/models.service.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-env';
 
 export interface StreamCallbacks {
   onToken: (token: string) => void;
+  onImages?: (images: string[]) => void;
   onDone: () => void;
   onError: (error: Error) => void;
 }
@@ -28,10 +29,6 @@ interface SessionState {
 @Injectable()
 export class AppService {
   private readonly logger = new Logger(AppService.name);
-  private readonly client = new OpenAI({
-    apiKey: process.env.DEEPSEEK_API_KEY || '',
-    baseURL: process.env.DEEPSEEK_BASE_URL || 'https://api.deepseek.com',
-  });
 
   private sessions = new Map<string, SessionState>();
   private sessionCounter = 0;
@@ -44,6 +41,7 @@ export class AppService {
     @InjectRepository(Message)
     private readonly messageRepo: Repository<Message>,
     private readonly uploadService: UploadService,
+    private readonly modelsService: ModelsService,
   ) {}
 
   getHello(): string {
@@ -230,8 +228,16 @@ export class AppService {
     conversationId: number,
     role: 'user' | 'assistant',
     content: string,
+    images?: string[],
+    model?: string,
   ): Promise<Message> {
-    const message = this.messageRepo.create({ conversationId, role, content });
+    const message = this.messageRepo.create({
+      conversationId,
+      role,
+      content,
+      images: images && images.length ? images : undefined,
+      model,
+    });
     return this.messageRepo.save(message);
   }
 
@@ -275,6 +281,7 @@ export class AppService {
     message: string,
     callbacks: StreamCallbacks,
     conversationId?: number,
+    modelType?: string,
   ): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -288,63 +295,56 @@ export class AppService {
       await this.saveMessage(conversationId, 'user', message);
     }
 
-    let fullResponse = '';
+    const provider = this.modelsService.getProvider(modelType);
+    let fullText = '';
+    const images: string[] = [];
 
     try {
-      const stream = await this.client.chat.completions.create(
+      await provider.run(
+        { message, signal: session.abortController.signal },
         {
-          model: 'deepseek-v4-flash',
-          messages: [{ role: 'user', content: message }],
-          stream: true,
+          onDelta: async (delta) => {
+            // 文本增量：支持暂停（暂停时阻塞，恢复后继续）
+            if (delta.content) {
+              if (session.paused) {
+                await new Promise<void>((resolve) => {
+                  session.resumeResolve = resolve;
+                });
+              }
+              if (session.abortController.signal.aborted) return;
+              fullText += delta.content;
+              callbacks.onToken(delta.content);
+            }
+            // 图片增量：统一回传
+            if (delta.images && delta.images.length) {
+              images.push(...delta.images);
+              callbacks.onImages?.(delta.images);
+            }
+          },
         },
-        { signal: session.abortController.signal },
       );
 
-      for await (const chunk of stream) {
-        if (session.abortController.signal.aborted) {
-          break;
-        }
-
-        const content = chunk.choices[0]?.delta?.content;
-        if (!content) continue;
-
-        fullResponse += content;
-
-        if (session.paused) {
-          session.buffer.push(content);
-          await new Promise<void>((resolve) => {
-            if (!session.paused) {
-              resolve();
-              return;
-            }
-            session.resumeResolve = resolve;
-          });
-
-          if (session.abortController.signal.aborted) {
-            break;
-          }
-
-          while (session.buffer.length > 0) {
-            const bufferedToken = session.buffer.shift()!;
-            callbacks.onToken(bufferedToken);
-            await this.delay(30);
-          }
-          continue;
-        }
-
-        callbacks.onToken(content);
-      }
-
-      // 保存 assistant 完整回复
-      if (conversationId && fullResponse) {
-        await this.saveMessage(conversationId, 'assistant', fullResponse);
+      if (conversationId && (fullText || images.length)) {
+        await this.saveMessage(
+          conversationId,
+          'assistant',
+          fullText,
+          images,
+          modelType,
+        );
       }
 
       callbacks.onDone();
     } catch (e) {
-      // 即使异常也尝试保存已有的回复
-      if (conversationId && fullResponse) {
-        await this.saveMessage(conversationId, 'assistant', fullResponse);
+      // 即使异常也尝试保存已有的结果
+      if (conversationId && (fullText || images.length)) {
+        await this.saveMessage(
+          conversationId,
+          'assistant',
+          fullText,
+          images,
+          modelType,
+        );
       }
 
       if ((e as Error).name === 'AbortError') {
@@ -355,9 +355,5 @@ export class AppService {
     } finally {
       this.sessions.delete(sessionId);
     }
-  }
-
-  private delay(ms: number): Promise<void> {
-    return new Promise((resolve) => setTimeout(resolve, ms));
   }
 }
