@@ -157,6 +157,7 @@ export class AppController {
       conversationId?: number;
       userId?: number;
       model?: string;
+      thinking?: boolean;
     },
     @Res() res: Response,
   ) {
@@ -212,6 +213,7 @@ export class AppController {
       },
       conversationId,
       body.model,
+      body.thinking,
     );
   }
 
@@ -245,6 +247,32 @@ export class AppController {
       return { code: -1, message: '会话不存在', data: null };
     }
     return { code: 0, message: 'success', data: null };
+  }
+
+  /**
+   * 重命名会话
+   * PUT /conversations/:id  { title }
+   */
+  @Put('conversations/:id')
+  async renameConversation(
+    @Param('id') id: string,
+    @Body() body: { title?: string },
+  ) {
+    if (!body?.title || !body.title.trim()) {
+      return { code: -1, message: '标题不能为空', data: null };
+    }
+    const conv = await this.appService.updateConversationTitle(
+      Number(id),
+      body.title,
+    );
+    if (!conv) {
+      return { code: -1, message: '会话不存在', data: null };
+    }
+    return {
+      code: 0,
+      message: 'success',
+      data: { id: String(conv.id), title: conv.title },
+    };
   }
 
   @Post('chat/pause/:sessionId')

@@ -276,12 +276,39 @@ export class AppService {
     return true;
   }
 
+  /**
+   * 重命名会话标题
+   */
+  async updateConversationTitle(
+    conversationId: number,
+    title: string,
+  ): Promise<Conversation | null> {
+    const conversation = await this.conversationRepo.findOne({
+      where: { id: conversationId },
+    });
+    if (!conversation) return null;
+    const next = title.trim();
+    if (next) conversation.title = next.slice(0, 255);
+    return this.conversationRepo.save(conversation);
+  }
+
+  /**
+   * 触碰会话：把 updatedAt 更新为当前时间（用于"每次会话结束存当前时间"，
+   * 使会话按最近活跃时间排序）。
+   */
+  async touchConversation(conversationId: number): Promise<void> {
+    await this.conversationRepo.update(conversationId, {
+      updatedAt: new Date(),
+    });
+  }
+
   async chatStream(
     sessionId: string,
     message: string,
     callbacks: StreamCallbacks,
     conversationId?: number,
     modelType?: string,
+    thinking?: boolean,
   ): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -301,7 +328,7 @@ export class AppService {
 
     try {
       await provider.run(
-        { message, signal: session.abortController.signal },
+        { message, signal: session.abortController.signal, thinking },
         {
           onDelta: async (delta) => {
             // 文本增量：支持暂停（暂停时阻塞，恢复后继续）
@@ -333,6 +360,8 @@ export class AppService {
           modelType,
         );
       }
+      // 会话结束：记录当前时间到 updatedAt
+      if (conversationId) await this.touchConversation(conversationId);
 
       callbacks.onDone();
     } catch (e) {
