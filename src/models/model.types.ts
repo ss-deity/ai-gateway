@@ -19,6 +19,8 @@ export interface ChatContext {
   message: string;
   /** 中止信号，用于终止生成 */
   signal: AbortSignal;
+  /** 深度思考（reasoning）开关，各 Provider 自行决定如何生效 */
+  thinking?: boolean;
 }
 
 export interface ModelProvider {
