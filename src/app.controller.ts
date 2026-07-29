@@ -151,7 +151,13 @@ export class AppController {
    */
   @Post('chat')
   async chat(
-    @Body() body: { message: string; conversationId?: number; userId?: number },
+    @Body()
+    body: {
+      message: string;
+      conversationId?: number;
+      userId?: number;
+      model?: string;
+    },
     @Res() res: Response,
   ) {
     res.setHeader('Content-Type', 'text/event-stream');
@@ -190,6 +196,11 @@ export class AppController {
             `data: ${JSON.stringify({ choices: [{ delta: { content: token } }], sessionId, conversationId })}\n\n`,
           );
         },
+        onImages(images: string[]) {
+          res.write(
+            `data: ${JSON.stringify({ choices: [{ delta: { images } }], sessionId, conversationId })}\n\n`,
+          );
+        },
         onDone() {
           res.write('data: [DONE]\n\n');
           res.end();
@@ -200,6 +211,7 @@ export class AppController {
         },
       },
       conversationId,
+      body.model,
     );
   }
 

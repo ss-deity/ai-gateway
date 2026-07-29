@@ -18,6 +18,14 @@ export class Message {
   @Column({ type: 'text' })
   content!: string;
 
+  /** 生成的图片 URL 列表（如即梦图片生成），文本消息为空 */
+  @Column({ type: 'simple-json', nullable: true })
+  images?: string[];
+
+  /** 生成该消息所用的模型 type（如 deepseek-v4 / jimeng-v4.6） */
+  @Column({ type: 'varchar', length: 64, nullable: true })
+  model?: string;
+
   @ManyToOne(() => Conversation, (conversation) => conversation.messages)
   conversation!: Conversation;
 

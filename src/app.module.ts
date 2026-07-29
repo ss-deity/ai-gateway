@@ -3,6 +3,8 @@ import { TypeOrmModule } from '@nestjs/typeorm';
 import { AppController } from './app.controller';
 import { AppService } from './app.service';
 import { UploadModule } from './upload/upload.module.js';
+import { ImageModule } from './image/image.module.js';
+import { ModelsModule } from './models/models.module.js';
 import { User, Conversation, Message } from './entities/index.js';
 
 @Module({
@@ -19,6 +21,8 @@ import { User, Conversation, Message } from './entities/index.js';
     }),
     TypeOrmModule.forFeature([User, Conversation, Message]),
     UploadModule,
+    ImageModule,
+    ModelsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
