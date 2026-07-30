@@ -15,12 +15,21 @@ export interface ProviderCallbacks {
   onDelta: (delta: UniformDelta) => void | Promise<void>;
 }
 
+export interface Attachment {
+  url: string;
+  name: string;
+  type: string;
+  size: number;
+}
+
 export interface ChatContext {
   message: string;
   /** 中止信号，用于终止生成 */
   signal: AbortSignal;
   /** 深度思考（reasoning）开关，各 Provider 自行决定如何生效 */
   thinking?: boolean;
+  /** 用户随本条消息上传的附件（图片 / 文档等） */
+  attachments?: Attachment[];
 }
 
 export interface ModelProvider {

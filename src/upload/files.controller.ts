@@ -114,4 +114,30 @@ export class FilesController {
       return { code: -1, message: (e as Error).message, data: null };
     }
   }
+
+  /**
+   * 转存会话图片到「文件管理」
+   * POST /files/save-image { userId, url, dir?, name? }
+   * url 支持第三方 http(s) 图片地址与 base64 data URI；服务端下载后写入 BOS。
+   */
+  @Post('save-image')
+  async saveImage(
+    @Body()
+    body: { userId?: number; url?: string; dir?: string; name?: string },
+  ) {
+    if (!body.userId || !body.url) {
+      return { code: -1, message: '缺少 userId 或 url', data: null };
+    }
+    try {
+      const entry = await this.uploadService.saveImageFromUrl(
+        Number(body.userId),
+        body.url,
+        body.dir,
+        body.name,
+      );
+      return { code: 0, message: 'success', data: entry };
+    } catch (e) {
+      return { code: -1, message: (e as Error).message, data: null };
+    }
+  }
 }

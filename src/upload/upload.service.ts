@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { lookup } from 'dns/promises';
+import { isIP } from 'net';
 import { User } from '../entities/user.entity.js';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -18,6 +20,28 @@ const BOS_BUCKET = process.env.BOS_BUCKET || '';
 
 /** 目录占位对象文件名：用于在对象存储中"落"出一个空目录 */
 const FOLDER_MARKER = '.folder';
+
+/**
+ * 允许转存的图片 MIME → 文件扩展名。
+ * BOS 没有"按远程 URL 拉取对象"的服务端接口（copyObject 的源必须是 BOS 内的对象），
+ * 所以远程图片只能由服务端先下载到内存、再 putObject，这里用于推断落地文件名的后缀。
+ */
+const IMAGE_MIME_EXT: Record<string, string> = {
+  'image/jpeg': 'jpg',
+  'image/jpg': 'jpg',
+  'image/png': 'png',
+  'image/webp': 'webp',
+  'image/gif': 'gif',
+  'image/bmp': 'bmp',
+  'image/svg+xml': 'svg',
+  'image/avif': 'avif',
+};
+
+/** 单张转存图片的大小上限：20MB */
+const MAX_SAVE_IMAGE_BYTES = 20 * 1024 * 1024;
+
+/** 远程图片下载超时 */
+const FETCH_IMAGE_TIMEOUT_MS = 30_000;
 
 /** listObjects 返回的对象条目（仅取用到的字段） */
 interface BosObject {
@@ -62,10 +86,16 @@ export class UploadService {
   }
 
   /**
-   * 组合 BOS 完整可访问 URL
+   * 组合 BOS 完整可访问 URL。
+   * key 里可能含中文、空格等字符，需按路径段做 percent-encoding，
+   * 否则拼出来的不是合法 URL（BOS SDK 内部也是这样编码请求路径的）。
    */
   private urlOf(key: string): string {
-    return `https://${BOS_BUCKET}.bj.bcebos.com/${key}`;
+    const encodedKey = key
+      .split('/')
+      .map((segment) => encodeURIComponent(segment))
+      .join('/');
+    return `https://${BOS_BUCKET}.bj.bcebos.com/${encodedKey}`;
   }
 
   /**
@@ -326,6 +356,203 @@ export class UploadService {
       lastModified: Date.now(),
       url: isDir ? undefined : this.urlOf(`${root}${newRel}`),
     };
+  }
+
+  /* ========================= 会话图片转存 ========================= */
+
+  /**
+   * 把会话中的一张图片转存到该用户「文件管理」的某个目录下。
+   *
+   * 会话图片有两种来源：即梦返回的第三方临时 URL、以及 base64 data URI，两者都不在我们的
+   * BOS 里，而 BOS 的 copyObject 只支持 BOS 内部对象作为源、也没有"按 URL 远程拉取"的接口，
+   * 因此只能服务端下载到内存再 putObject（不落磁盘、不经过浏览器）。
+   *
+   * @param userId 用户数字 id
+   * @param sourceUrl 图片地址：http(s) URL 或 `data:image/*;base64,...`
+   * @param dir 目标目录（相对用户根目录，缺省为根目录）
+   * @param name 指定文件名，缺省按时间戳生成
+   */
+  async saveImageFromUrl(
+    userId: number,
+    sourceUrl: string,
+    dir?: string,
+    name?: string,
+  ): Promise<FileEntry> {
+    const uid = await this.resolveUid(userId);
+    const root = this.userFolderPrefix(uid);
+    const relDir = this.normalizeRel(dir);
+    const dirPrefix = this.dirPrefix(relDir);
+
+    const { buffer, mime } = await this.fetchImage(sourceUrl);
+    const ext = IMAGE_MIME_EXT[mime] ?? 'png';
+    const baseName = name
+      ? this.sanitizeFileName(name)
+      : `AI图片_${this.timestampSuffix()}.${ext}`;
+    const fileName = await this.uniqueFileName(`${root}${dirPrefix}`, baseName);
+    const key = `${root}${dirPrefix}${fileName}`;
+
+    await this.bosClient.putObject(BOS_BUCKET, key, buffer, {
+      'Content-Type': mime,
+      'x-bce-acl': 'public-read',
+    });
+
+    return {
+      name: fileName,
+      path: `${dirPrefix}${fileName}`,
+      isDir: false,
+      size: buffer.length,
+      lastModified: Date.now(),
+      url: this.urlOf(key),
+    };
+  }
+
+  /** 生成 `20260729_153012` 形式的时间戳（本地时区），用于默认文件名 */
+  private timestampSuffix(): string {
+    const d = new Date();
+    const p = (n: number) => String(n).padStart(2, '0');
+    return (
+      `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}` +
+      `_${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
+    );
+  }
+
+  /**
+   * 目标目录内已存在同名文件时，追加 ` (1)` ` (2)` 后缀直到不冲突。
+   */
+  private async uniqueFileName(
+    dirFullPrefix: string,
+    fileName: string,
+  ): Promise<string> {
+    const objects = await this.listAllObjects(dirFullPrefix);
+    const existing = new Set(
+      objects
+        .map((o) => o.key.slice(dirFullPrefix.length))
+        .filter((rel) => rel && !rel.includes('/')),
+    );
+    if (!existing.has(fileName)) return fileName;
+
+    const dot = fileName.lastIndexOf('.');
+    const stem = dot > 0 ? fileName.slice(0, dot) : fileName;
+    const suffix = dot > 0 ? fileName.slice(dot) : '';
+    for (let i = 1; ; i++) {
+      const candidate = `${stem} (${i})${suffix}`;
+      if (!existing.has(candidate)) return candidate;
+    }
+  }
+
+  /**
+   * 取回图片内容：支持 data URI 与 http(s) URL。
+   * URL 由客户端传入，因此这里做 SSRF 防护（仅 http/https、拒绝内网地址）、
+   * MIME 白名单与大小上限校验。
+   */
+  private async fetchImage(
+    sourceUrl: string,
+  ): Promise<{ buffer: Buffer; mime: string }> {
+    const src = (sourceUrl || '').trim();
+    if (!src) throw new Error('图片地址不能为空');
+
+    if (src.startsWith('data:')) {
+      const match = /^data:([^;,]+)(;base64)?,(.*)$/s.exec(src);
+      if (!match) throw new Error('图片 data URI 格式不正确');
+      const mime = match[1].toLowerCase();
+      if (!IMAGE_MIME_EXT[mime]) {
+        throw new Error(`不支持的图片格式：${mime}`);
+      }
+      const buffer = match[2]
+        ? Buffer.from(match[3], 'base64')
+        : Buffer.from(decodeURIComponent(match[3]), 'utf8');
+      if (buffer.length === 0) throw new Error('图片内容为空');
+      if (buffer.length > MAX_SAVE_IMAGE_BYTES) {
+        throw new Error('图片超过 20MB，无法转存');
+      }
+      return { buffer, mime };
+    }
+
+    await this.assertPublicHttpUrl(src);
+
+    const res = await fetch(src, {
+      redirect: 'follow',
+      signal: AbortSignal.timeout(FETCH_IMAGE_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      throw new Error(`下载图片失败：HTTP ${res.status}`);
+    }
+
+    const mime = (res.headers.get('content-type') || '')
+      .split(';')[0]
+      .trim()
+      .toLowerCase();
+    if (!IMAGE_MIME_EXT[mime]) {
+      throw new Error(`不支持的图片格式：${mime || '未知'}`);
+    }
+
+    const declaredSize = Number(res.headers.get('content-length') || 0);
+    if (declaredSize > MAX_SAVE_IMAGE_BYTES) {
+      throw new Error('图片超过 20MB，无法转存');
+    }
+
+    const buffer = Buffer.from(await res.arrayBuffer());
+    if (buffer.length === 0) throw new Error('图片内容为空');
+    if (buffer.length > MAX_SAVE_IMAGE_BYTES) {
+      throw new Error('图片超过 20MB，无法转存');
+    }
+    return { buffer, mime };
+  }
+
+  /**
+   * SSRF 防护：只允许 http/https，且解析出的 IP 不能落在内网/回环/链路本地网段。
+   */
+  private async assertPublicHttpUrl(rawUrl: string): Promise<void> {
+    let url: URL;
+    try {
+      url = new URL(rawUrl);
+    } catch {
+      throw new Error('图片地址不是合法的 URL');
+    }
+    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+      throw new Error('图片地址仅支持 http / https');
+    }
+
+    const host = url.hostname.replace(/^\[|\]$/g, '');
+    const addresses = isIP(host)
+      ? [host]
+      : (await lookup(host, { all: true })).map((a) => a.address);
+    if (addresses.length === 0) {
+      throw new Error('图片地址无法解析');
+    }
+    if (addresses.some((addr) => this.isPrivateAddress(addr))) {
+      throw new Error('不允许转存内网地址的图片');
+    }
+  }
+
+  /** 判断 IP 是否属于内网 / 回环 / 链路本地 / 未指定地址 */
+  private isPrivateAddress(address: string): boolean {
+    const addr = address.toLowerCase();
+    if (isIP(addr) === 6) {
+      // 去掉 IPv4-mapped 前缀后按 IPv4 规则再判一次
+      const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(addr);
+      if (mapped) return this.isPrivateAddress(mapped[1]);
+      return (
+        addr === '::' ||
+        addr === '::1' ||
+        addr.startsWith('fe80:') ||
+        addr.startsWith('fc') ||
+        addr.startsWith('fd')
+      );
+    }
+    const p = addr.split('.').map(Number);
+    if (p.length !== 4 || p.some((n) => Number.isNaN(n))) return true;
+    const [a, b] = p;
+    return (
+      a === 0 ||
+      a === 10 ||
+      a === 127 ||
+      (a === 169 && b === 254) ||
+      (a === 172 && b >= 16 && b <= 31) ||
+      (a === 192 && b === 168) ||
+      (a === 100 && b >= 64 && b <= 127) ||
+      a >= 224
+    );
   }
 
   /** 列举某前缀下的全部对象（自动翻页） */

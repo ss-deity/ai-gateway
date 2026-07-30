@@ -1,6 +1,7 @@
 import { Controller, Get, Post, Body, Res, Param, Query, Delete, Put } from '@nestjs/common';
 import type { Response } from 'express';
 import { AppService } from './app.service';
+import type { Attachment } from './models/model.types.js';
 
 @Controller()
 export class AppController {
@@ -158,6 +159,7 @@ export class AppController {
       userId?: number;
       model?: string;
       thinking?: boolean;
+      attachments?: Attachment[];
     },
     @Res() res: Response,
   ) {
@@ -214,6 +216,7 @@ export class AppController {
       conversationId,
       body.model,
       body.thinking,
+      body.attachments,
     );
   }
 

@@ -31,10 +31,43 @@ export class DeepseekProvider implements ModelProvider {
   ): Promise<{ text: string; images: string[] }> {
     let text = '';
     const thinking = ctx.thinking === true;
+
+    // 拼装用户消息：
+    //   - 无附件：纯字符串 content（保持与旧行为一致）
+    //   - 有图片附件：OpenAI vision 格式的数组 content（text + image_url）
+    //   - 非图片附件（如 pdf/txt）：URL 追加到文本末尾，供模型参考
+    const attachments = ctx.attachments || [];
+    const imageAttachments = attachments.filter((a) =>
+      (a.type || '').startsWith('image/'),
+    );
+    const nonImageAttachments = attachments.filter(
+      (a) => !(a.type || '').startsWith('image/'),
+    );
+
+    let userContent: any = ctx.message;
+    if (imageAttachments.length) {
+      const textWithDocs = nonImageAttachments.length
+        ? `${ctx.message}\n\n以下是随消息一同上传的文档链接：\n${nonImageAttachments
+            .map((a) => `- ${a.name}: ${a.url}`)
+            .join('\n')}`
+        : ctx.message;
+      userContent = [
+        { type: 'text', text: textWithDocs },
+        ...imageAttachments.map((a) => ({
+          type: 'image_url',
+          image_url: { url: a.url },
+        })),
+      ];
+    } else if (nonImageAttachments.length) {
+      userContent = `${ctx.message}\n\n以下是随消息一同上传的文档链接：\n${nonImageAttachments
+        .map((a) => `- ${a.name}: ${a.url}`)
+        .join('\n')}`;
+    }
+
     // OpenAI SDK 类型未覆盖 DeepSeek 的 thinking 扩展参数，需通过局部 any 透传
     const params: any = {
       model: thinking ? this.thinkingModel : this.model,
-      messages: [{ role: 'user', content: ctx.message }],
+      messages: [{ role: 'user', content: userContent }],
       stream: true,
     };
     if (thinking) {
