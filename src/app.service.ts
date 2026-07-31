@@ -8,6 +8,7 @@ import { Conversation } from './entities/conversation.entity.js';
 import { Message } from './entities/message.entity.js';
 import { UploadService } from './upload/upload.service.js';
 import { ModelsService } from './models/models.service.js';
+import type { Attachment } from './models/model.types.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-env';
 
@@ -230,12 +231,14 @@ export class AppService {
     content: string,
     images?: string[],
     model?: string,
+    attachments?: Attachment[],
   ): Promise<Message> {
     const message = this.messageRepo.create({
       conversationId,
       role,
       content,
       images: images && images.length ? images : undefined,
+      attachments: attachments && attachments.length ? attachments : undefined,
       model,
     });
     return this.messageRepo.save(message);
@@ -309,6 +312,7 @@ export class AppService {
     conversationId?: number,
     modelType?: string,
     thinking?: boolean,
+    attachments?: Attachment[],
   ): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -319,7 +323,14 @@ export class AppService {
     // 如果提供了 conversationId，保存用户消息
     if (conversationId) {
       session.conversationId = conversationId;
-      await this.saveMessage(conversationId, 'user', message);
+      await this.saveMessage(
+        conversationId,
+        'user',
+        message,
+        undefined,
+        undefined,
+        attachments,
+      );
     }
 
     const provider = this.modelsService.getProvider(modelType);
@@ -328,7 +339,12 @@ export class AppService {
 
     try {
       await provider.run(
-        { message, signal: session.abortController.signal, thinking },
+        {
+          message,
+          signal: session.abortController.signal,
+          thinking,
+          attachments,
+        },
         {
           onDelta: async (delta) => {
             // 文本增量：支持暂停（暂停时阻塞，恢复后继续）

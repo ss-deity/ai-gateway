@@ -22,6 +22,10 @@ export class Message {
   @Column({ type: 'simple-json', nullable: true })
   images?: string[];
 
+  /** 用户上传的附件列表（图片 / 文档），仅 user 消息使用 */
+  @Column({ type: 'simple-json', nullable: true })
+  attachments?: { url: string; name: string; type: string; size: number }[];
+
   /** 生成该消息所用的模型 type（如 deepseek-v4 / jimeng-v4.6） */
   @Column({ type: 'varchar', length: 64, nullable: true })
   model?: string;
