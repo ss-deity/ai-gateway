@@ -228,7 +228,7 @@ export class ImageService {
     params: Record<string, unknown> = {},
   ): Promise<string[]> {
     this.logger.log(
-      `即梦 generate 开始 req_key候选=[${REQ_KEY_CANDIDATES.join(', ')}] hasAK=${!!AK} hasSK=${!!SK} host=${HOST} prompt=${prompt.slice(0, 60)}`,
+      `即梦 generate 开始 req_key候选=[${REQ_KEY_CANDIDATES.join(', ')}] hasAK=${!!AK} hasSK=${!!SK} host=${HOST} 参考图=${Array.isArray(params.image_urls) ? params.image_urls.length : 0} prompt=${prompt.slice(0, 60)}`,
     );
     const { taskId, reqKey } = await this.submitTask(prompt, params);
 

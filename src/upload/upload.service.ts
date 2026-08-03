@@ -40,6 +40,20 @@ const IMAGE_MIME_EXT: Record<string, string> = {
 /** 单张转存图片的大小上限：20MB */
 const MAX_SAVE_IMAGE_BYTES = 20 * 1024 * 1024;
 
+/** 图片扩展名白名单：用于「@ 选图」时从对象列表里筛出图片 */
+const IMAGE_EXT_SET = new Set([
+  'jpg',
+  'jpeg',
+  'png',
+  'gif',
+  'webp',
+  'bmp',
+  'svg',
+  'ico',
+  'avif',
+  'jfif',
+]);
+
 /** 远程图片下载超时 */
 const FETCH_IMAGE_TIMEOUT_MS = 30_000;
 
@@ -256,6 +270,49 @@ export class UploadService {
   }
 
   /**
+   * 递归检索该用户「文件管理」下的全部图片文件，供输入框 @ 唤起时选择。
+   * 与 listFiles 不同：跨全部子目录、只返回图片、按名称关键字过滤并限量。
+   *
+   * @param keyword 文件名关键字（不区分大小写），缺省返回最近修改的若干张
+   * @param limit 返回条数上限
+   */
+  async searchImages(
+    userId: number,
+    keyword?: string,
+    limit = 50,
+  ): Promise<FileEntry[]> {
+    const uid = await this.resolveUid(userId);
+    const root = this.userFolderPrefix(uid);
+    const objects = await this.listAllObjects(root);
+    const kw = (keyword || '').trim().toLowerCase();
+
+    const images: FileEntry[] = [];
+    for (const obj of objects) {
+      const rel = obj.key.slice(root.length);
+      if (!rel || rel.endsWith('/')) continue;
+      const name = rel.slice(rel.lastIndexOf('/') + 1);
+      if (!name || name === FOLDER_MARKER) continue;
+      // 头像目录不属于用户可见的文件管理内容
+      if (rel.startsWith('avatar/')) continue;
+      const ext = name.split('.').pop()?.toLowerCase() || '';
+      if (!IMAGE_EXT_SET.has(ext)) continue;
+      if (kw && !name.toLowerCase().includes(kw)) continue;
+      images.push({
+        name,
+        path: rel,
+        isDir: false,
+        size: obj.size ?? 0,
+        lastModified: obj.lastModified ? Date.parse(obj.lastModified) : 0,
+        url: this.urlOf(obj.key),
+      });
+    }
+
+    // 最近修改的优先展示
+    images.sort((a, b) => b.lastModified - a.lastModified);
+    return images.slice(0, Math.max(1, limit));
+  }
+
+  /**
    * 新建文件夹：在 `root/dir/name/` 下放一个 0 字节占位对象来"落"目录。
    */
   async createFolder(
@@ -309,6 +366,24 @@ export class UploadService {
   }
 
   /**
+   * 复制对象，并显式重新声明 public-read ACL。
+   *
+   * BOS 的 copyObject 不会继承源对象的 ACL：不带 x-bce-acl 时目标对象会退回 bucket
+   * 默认权限（private），于是「重命名后原来能打开的链接变 403」。上传/转存写入时都是
+   * public-read，这里必须补上，否则复制出来的新对象就不可公开访问了。
+   * 目录占位对象保持 private，与 createFolder 一致。
+   */
+  private async copyObjectKeepingAcl(
+    srcKey: string,
+    dstKey: string,
+  ): Promise<void> {
+    const isFolderMarker = dstKey.endsWith(`/${FOLDER_MARKER}`);
+    await this.bosClient.copyObject(BOS_BUCKET, srcKey, BOS_BUCKET, dstKey, {
+      'x-bce-acl': isFolderMarker ? 'private' : 'public-read',
+    });
+  }
+
+  /**
    * 重命名文件或文件夹（同目录内改名）。BOS 无原生重命名，采用复制 + 删除实现。
    */
   async renameEntry(
@@ -330,7 +405,7 @@ export class UploadService {
     if (!isDir) {
       const srcKey = `${root}${rel}`;
       const dstKey = `${root}${newRel}`;
-      await this.bosClient.copyObject(BOS_BUCKET, srcKey, BOS_BUCKET, dstKey);
+      await this.copyObjectKeepingAcl(srcKey, dstKey);
       await this.bosClient.deleteObject(BOS_BUCKET, srcKey);
     } else {
       const srcPrefix = `${root}${rel}/`;
@@ -343,7 +418,7 @@ export class UploadService {
           : [`${srcPrefix}${FOLDER_MARKER}`];
       for (const srcKey of keys) {
         const dstKey = `${dstPrefix}${srcKey.slice(srcPrefix.length)}`;
-        await this.bosClient.copyObject(BOS_BUCKET, srcKey, BOS_BUCKET, dstKey);
+        await this.copyObjectKeepingAcl(srcKey, dstKey);
       }
       await this.deleteKeys(objects.map((o) => o.key));
     }

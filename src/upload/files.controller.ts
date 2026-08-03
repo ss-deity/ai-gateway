@@ -34,6 +34,29 @@ export class FilesController {
   }
 
   /**
+   * 递归检索用户全部图片文件（输入框 @ 选图用）
+   * GET /files/images?userId=<id>&keyword=<文件名关键字>
+   */
+  @Get('images')
+  async listImages(
+    @Query('userId') userId?: string,
+    @Query('keyword') keyword?: string,
+  ) {
+    if (!userId) {
+      return { code: -1, message: '缺少 userId', data: null };
+    }
+    try {
+      const list = await this.uploadService.searchImages(
+        Number(userId),
+        keyword,
+      );
+      return { code: 0, message: 'success', data: list };
+    } catch (e) {
+      return { code: -1, message: (e as Error).message, data: null };
+    }
+  }
+
+  /**
    * 新建文件夹
    * POST /files/folder { userId, dir?, name }
    */
