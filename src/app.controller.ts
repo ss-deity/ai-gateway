@@ -160,6 +160,8 @@ export class AppController {
       model?: string;
       thinking?: boolean;
       attachments?: Attachment[];
+      /** 输入框 `/` 唤起的技能 id 列表（见 GET /skills） */
+      skills?: string[];
     },
     @Res() res: Response,
   ) {
@@ -217,6 +219,7 @@ export class AppController {
       body.model,
       body.thinking,
       body.attachments,
+      body.skills,
     );
   }
 

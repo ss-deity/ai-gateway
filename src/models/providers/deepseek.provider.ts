@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import OpenAI from 'openai';
+import { buildDocumentBlock } from '../attachment-text.js';
 import type {
   ChatContext,
   ModelProvider,
@@ -33,24 +34,23 @@ export class DeepseekProvider implements ModelProvider {
     const thinking = ctx.thinking === true;
 
     // 拼装用户消息：
-    //   - 无附件：纯字符串 content（保持与旧行为一致）
-    //   - 有图片附件：OpenAI vision 格式的数组 content（text + image_url）
-    //   - 非图片附件（如 pdf/txt）：URL 追加到文本末尾，供模型参考
+    //   - 图片附件：OpenAI vision 格式的数组 content（text + image_url）
+    //   - 文本附件（txt / md 等）：网关侧下载正文并内联进 prompt
+    //     （DeepSeek 不会主动访问 URL，只贴链接模型读不到内容）
+    //   - 其它附件（如 pdf）：仅列出名称与链接
     const attachments = ctx.attachments || [];
     const imageAttachments = attachments.filter((a) =>
       (a.type || '').startsWith('image/'),
     );
-    const nonImageAttachments = attachments.filter(
+    const docAttachments = attachments.filter(
       (a) => !(a.type || '').startsWith('image/'),
     );
 
-    let userContent: any = ctx.message;
+    const docBlock = await buildDocumentBlock(docAttachments);
+    const textWithDocs = docBlock ? `${ctx.message}${docBlock}` : ctx.message;
+
+    let userContent: any = textWithDocs;
     if (imageAttachments.length) {
-      const textWithDocs = nonImageAttachments.length
-        ? `${ctx.message}\n\n以下是随消息一同上传的文档链接：\n${nonImageAttachments
-            .map((a) => `- ${a.name}: ${a.url}`)
-            .join('\n')}`
-        : ctx.message;
       userContent = [
         { type: 'text', text: textWithDocs },
         ...imageAttachments.map((a) => ({
@@ -58,16 +58,19 @@ export class DeepseekProvider implements ModelProvider {
           image_url: { url: a.url },
         })),
       ];
-    } else if (nonImageAttachments.length) {
-      userContent = `${ctx.message}\n\n以下是随消息一同上传的文档链接：\n${nonImageAttachments
-        .map((a) => `- ${a.name}: ${a.url}`)
-        .join('\n')}`;
     }
 
     // OpenAI SDK 类型未覆盖 DeepSeek 的 thinking 扩展参数，需通过局部 any 透传
+    // 技能指令走 system 角色下发（优先级高于用户消息，模型会按其约束作答）
+    const messages: any[] = [];
+    if (ctx.system) {
+      messages.push({ role: 'system', content: ctx.system });
+    }
+    messages.push({ role: 'user', content: userContent });
+
     const params: any = {
       model: thinking ? this.thinkingModel : this.model,
-      messages: [{ role: 'user', content: userContent }],
+      messages,
       stream: true,
     };
     if (thinking) {

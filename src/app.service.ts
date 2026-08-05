@@ -8,6 +8,7 @@ import { Conversation } from './entities/conversation.entity.js';
 import { Message } from './entities/message.entity.js';
 import { UploadService } from './upload/upload.service.js';
 import { ModelsService } from './models/models.service.js';
+import { SkillsService } from './skills/skills.service.js';
 import type { Attachment } from './models/model.types.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-env';
@@ -43,6 +44,7 @@ export class AppService {
     private readonly messageRepo: Repository<Message>,
     private readonly uploadService: UploadService,
     private readonly modelsService: ModelsService,
+    private readonly skillsService: SkillsService,
   ) {}
 
   getHello(): string {
@@ -313,6 +315,7 @@ export class AppService {
     modelType?: string,
     thinking?: boolean,
     attachments?: Attachment[],
+    skills?: string[],
   ): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
@@ -334,6 +337,8 @@ export class AppService {
     }
 
     const provider = this.modelsService.getProvider(modelType);
+    // 前端 `/` 唤起的技能：翻译成 system prompt 下发，模型据此约束输出
+    const system = this.skillsService.buildSystemPrompt(skills);
     let fullText = '';
     const images: string[] = [];
 
@@ -344,6 +349,7 @@ export class AppService {
           signal: session.abortController.signal,
           thinking,
           attachments,
+          system,
         },
         {
           onDelta: async (delta) => {

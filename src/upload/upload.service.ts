@@ -1,8 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
-import { lookup } from 'dns/promises';
-import { isIP } from 'net';
+import { resolveContentType } from '../common/content-type.js';
+import { assertPublicHttpUrl } from '../common/url-guard.js';
 import { User } from '../entities/user.entity.js';
 
 // eslint-disable-next-line @typescript-eslint/no-require-imports
@@ -159,7 +159,7 @@ export class UploadService {
     const key = `${this.userFolderPrefix(uid)}${dirPrefix}${safeName}`;
 
     await this.bosClient.putObject(BOS_BUCKET, key, file.buffer, {
-      'Content-Type': file.mimetype,
+      'Content-Type': resolveContentType(safeName, file.mimetype),
       'x-bce-acl': 'public-read',
     });
 
@@ -178,7 +178,7 @@ export class UploadService {
     const key = `${this.userFolderPrefix(uid)}avatar/${Date.now()}.${ext}`;
 
     await this.bosClient.putObject(BOS_BUCKET, key, file.buffer, {
-      'Content-Type': file.mimetype,
+      'Content-Type': resolveContentType(file.originalname, file.mimetype),
       'x-bce-acl': 'public-read',
     });
 
@@ -467,7 +467,7 @@ export class UploadService {
     const key = `${root}${dirPrefix}${fileName}`;
 
     await this.bosClient.putObject(BOS_BUCKET, key, buffer, {
-      'Content-Type': mime,
+      'Content-Type': resolveContentType(fileName, mime),
       'x-bce-acl': 'public-read',
     });
 
@@ -543,7 +543,7 @@ export class UploadService {
       return { buffer, mime };
     }
 
-    await this.assertPublicHttpUrl(src);
+    await assertPublicHttpUrl(src, '图片地址');
 
     const res = await fetch(src, {
       redirect: 'follow',
@@ -572,62 +572,6 @@ export class UploadService {
       throw new Error('图片超过 20MB，无法转存');
     }
     return { buffer, mime };
-  }
-
-  /**
-   * SSRF 防护：只允许 http/https，且解析出的 IP 不能落在内网/回环/链路本地网段。
-   */
-  private async assertPublicHttpUrl(rawUrl: string): Promise<void> {
-    let url: URL;
-    try {
-      url = new URL(rawUrl);
-    } catch {
-      throw new Error('图片地址不是合法的 URL');
-    }
-    if (url.protocol !== 'http:' && url.protocol !== 'https:') {
-      throw new Error('图片地址仅支持 http / https');
-    }
-
-    const host = url.hostname.replace(/^\[|\]$/g, '');
-    const addresses = isIP(host)
-      ? [host]
-      : (await lookup(host, { all: true })).map((a) => a.address);
-    if (addresses.length === 0) {
-      throw new Error('图片地址无法解析');
-    }
-    if (addresses.some((addr) => this.isPrivateAddress(addr))) {
-      throw new Error('不允许转存内网地址的图片');
-    }
-  }
-
-  /** 判断 IP 是否属于内网 / 回环 / 链路本地 / 未指定地址 */
-  private isPrivateAddress(address: string): boolean {
-    const addr = address.toLowerCase();
-    if (isIP(addr) === 6) {
-      // 去掉 IPv4-mapped 前缀后按 IPv4 规则再判一次
-      const mapped = /^::ffff:(\d+\.\d+\.\d+\.\d+)$/.exec(addr);
-      if (mapped) return this.isPrivateAddress(mapped[1]);
-      return (
-        addr === '::' ||
-        addr === '::1' ||
-        addr.startsWith('fe80:') ||
-        addr.startsWith('fc') ||
-        addr.startsWith('fd')
-      );
-    }
-    const p = addr.split('.').map(Number);
-    if (p.length !== 4 || p.some((n) => Number.isNaN(n))) return true;
-    const [a, b] = p;
-    return (
-      a === 0 ||
-      a === 10 ||
-      a === 127 ||
-      (a === 169 && b === 254) ||
-      (a === 172 && b >= 16 && b <= 31) ||
-      (a === 192 && b === 168) ||
-      (a === 100 && b >= 64 && b <= 127) ||
-      a >= 224
-    );
   }
 
   /** 列举某前缀下的全部对象（自动翻页） */

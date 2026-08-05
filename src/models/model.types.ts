@@ -30,6 +30,8 @@ export interface ChatContext {
   thinking?: boolean;
   /** 用户随本条消息上传的附件（图片 / 文档等） */
   attachments?: Attachment[];
+  /** 系统提示词（如技能指令），支持 system 角色的 Provider 应作为首条消息下发 */
+  system?: string;
 }
 
 export interface ModelProvider {
