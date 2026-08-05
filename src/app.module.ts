@@ -5,6 +5,7 @@ import { AppService } from './app.service';
 import { UploadModule } from './upload/upload.module.js';
 import { ImageModule } from './image/image.module.js';
 import { ModelsModule } from './models/models.module.js';
+import { SkillsModule } from './skills/skills.module.js';
 import { User, Conversation, Message } from './entities/index.js';
 
 @Module({
@@ -23,6 +24,7 @@ import { User, Conversation, Message } from './entities/index.js';
     UploadModule,
     ImageModule,
     ModelsModule,
+    SkillsModule,
   ],
   controllers: [AppController],
   providers: [AppService],
