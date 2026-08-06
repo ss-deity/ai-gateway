@@ -5,7 +5,9 @@ import {
   Delete,
   Body,
   Query,
+  Res,
 } from '@nestjs/common';
+import type { Response } from 'express';
 import { UploadService } from './upload.service.js';
 
 /**
@@ -53,6 +55,47 @@ export class FilesController {
       return { code: 0, message: 'success', data: list };
     } catch (e) {
       return { code: -1, message: (e as Error).message, data: null };
+    }
+  }
+
+  /**
+   * 下载文件（网关转发 BOS 流，同源返回，便于前端统计下载进度）
+   * GET /files/download?userId=<id>&path=<相对路径>
+   */
+  @Get('download')
+  async download(
+    @Res() res: Response,
+    @Query('userId') userId?: string,
+    @Query('path') path?: string,
+  ) {
+    if (!userId || !path) {
+      res.status(400).json({ code: -1, message: '缺少 userId 或 path' });
+      return;
+    }
+    try {
+      const { stream, size, contentType, name } =
+        await this.uploadService.openFileStream(Number(userId), path);
+
+      // 文件名可能含中文/空格，真实名称用 RFC 5987 的 filename* 传递；
+      // 响应头只能放 latin1 字符，因此 ASCII 兜底名要把非 ASCII 与引号换行一并替换掉
+      const fallbackName =
+        // eslint-disable-next-line no-control-regex
+        name.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_') || 'download';
+      res.setHeader('Content-Type', contentType);
+      if (size > 0) res.setHeader('Content-Length', String(size));
+      res.setHeader(
+        'Content-Disposition',
+        `attachment; filename="${fallbackName}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+      );
+      // 前端要读 Content-Length 算进度，跨端口开发时需显式放行该响应头
+      res.setHeader('Access-Control-Expose-Headers', 'Content-Length');
+
+      // 客户端中断（取消下载）时及时断开上游流，避免继续占用连接
+      res.on('close', () => stream.destroy());
+      stream.on('error', () => res.destroy());
+      stream.pipe(res);
+    } catch (e) {
+      res.status(500).json({ code: -1, message: (e as Error).message });
     }
   }
 

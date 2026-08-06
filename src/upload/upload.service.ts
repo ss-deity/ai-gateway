@@ -1,6 +1,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
+import { Readable } from 'stream';
+import type { ReadableStream as NodeReadableStream } from 'stream/web';
 import { resolveContentType } from '../common/content-type.js';
 import { assertPublicHttpUrl } from '../common/url-guard.js';
 import { User } from '../entities/user.entity.js';
@@ -56,6 +58,9 @@ const IMAGE_EXT_SET = new Set([
 
 /** 远程图片下载超时 */
 const FETCH_IMAGE_TIMEOUT_MS = 30_000;
+
+/** 从 BOS 读取文件（下载转发）的超时 */
+const FETCH_FILE_TIMEOUT_MS = 120_000;
 
 /** listObjects 返回的对象条目（仅取用到的字段） */
 interface BosObject {
@@ -572,6 +577,58 @@ export class UploadService {
       throw new Error('图片超过 20MB，无法转存');
     }
     return { buffer, mime };
+  }
+
+  /* ========================= 文件下载 ========================= */
+
+  /**
+   * 以流的方式取回某个文件，供 `GET /files/download` 边下边传给浏览器。
+   *
+   * BOS 对象本身是 public-read，但直接让浏览器访问 BOS 域名拿不到下载进度
+   * （跨域且不带 Content-Disposition），所以这里由网关做一次同源转发：
+   * 服务端 fetch 到 BOS 的可读流后直接 pipe 给响应，不在内存里缓冲整个文件。
+   */
+  async openFileStream(
+    userId: number,
+    relPath: string,
+  ): Promise<{
+    stream: Readable;
+    size: number;
+    contentType: string;
+    name: string;
+  }> {
+    const uid = await this.resolveUid(userId);
+    const root = this.userFolderPrefix(uid);
+    const rel = this.normalizeRel(relPath);
+    if (!rel) throw new Error('路径不能为空');
+    const name = rel.slice(rel.lastIndexOf('/') + 1);
+    if (!name || name === FOLDER_MARKER) throw new Error('路径不是有效文件');
+
+    const res = await fetch(this.urlOf(`${root}${rel}`), {
+      redirect: 'follow',
+      signal: AbortSignal.timeout(FETCH_FILE_TIMEOUT_MS),
+    });
+    if (!res.ok || !res.body) {
+      // BOS 对不存在的对象返回 403（无权列举），统一成用户能看懂的文案
+      if (res.status === 403 || res.status === 404) {
+        throw new Error('文件不存在或无法访问');
+      }
+      throw new Error(`读取文件失败：HTTP ${res.status}`);
+    }
+
+    return {
+      // fetch 返回的是 DOM 版 ReadableStream 类型，Readable.fromWeb 要求 node:stream/web 版，
+      // 两者运行时是同一个对象，仅类型声明不同，故这里做一次显式转换
+      stream: Readable.fromWeb(
+        res.body as unknown as NodeReadableStream<Uint8Array>,
+      ),
+      size: Number(res.headers.get('content-length') || 0),
+      contentType: resolveContentType(
+        name,
+        res.headers.get('content-type') || '',
+      ),
+      name,
+    };
   }
 
   /** 列举某前缀下的全部对象（自动翻页） */
