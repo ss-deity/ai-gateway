@@ -5,6 +5,7 @@ import {
 } from './model.types.js';
 import { DeepseekProvider } from './providers/deepseek.provider.js';
 import { JimengProvider } from './providers/jimeng.provider.js';
+import { OpenApiProvider } from './providers/openapi.provider.js';
 
 /**
  * 模型注册表 / 中间层：按 type 选中对应 Provider。
@@ -14,9 +15,14 @@ import { JimengProvider } from './providers/jimeng.provider.js';
 export class ModelsService {
   private readonly providers = new Map<string, ModelProvider>();
 
-  constructor(deepseek: DeepseekProvider, jimeng: JimengProvider) {
+  constructor(
+    deepseek: DeepseekProvider,
+    jimeng: JimengProvider,
+    openapi: OpenApiProvider,
+  ) {
     this.register(deepseek);
     this.register(jimeng);
+    this.register(openapi);
   }
 
   register(provider: ModelProvider): void {
