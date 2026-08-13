@@ -9,13 +9,20 @@ import { Message } from './entities/message.entity.js';
 import { UploadService } from './upload/upload.service.js';
 import { ModelsService } from './models/models.service.js';
 import { SkillsService } from './skills/skills.service.js';
-import type { Attachment } from './models/model.types.js';
+import { MemoryService } from './memory/memory.service.js';
+import type {
+  Attachment,
+  ChatHistoryMessage,
+  ToolCallFrame,
+} from './models/model.types.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-env';
 
 export interface StreamCallbacks {
   onToken: (token: string) => void;
   onImages?: (images: string[]) => void;
+  /** 工具调用状态变化（正在执行 / 执行完成） */
+  onTool?: (tool: ToolCallFrame) => void;
   onDone: () => void;
   onError: (error: Error) => void;
 }
@@ -45,6 +52,7 @@ export class AppService {
     private readonly uploadService: UploadService,
     private readonly modelsService: ModelsService,
     private readonly skillsService: SkillsService,
+    private readonly memoryService: MemoryService,
   ) {}
 
   getHello(): string {
@@ -101,11 +109,9 @@ export class AppService {
    * 生成 JWT token
    */
   generateToken(user: User): string {
-    return jwt.sign(
-      { id: user.id, username: user.username },
-      JWT_SECRET,
-      { expiresIn: '7d' },
-    );
+    return jwt.sign({ id: user.id, username: user.username }, JWT_SECRET, {
+      expiresIn: '7d',
+    });
   }
 
   /**
@@ -207,7 +213,11 @@ export class AppService {
   async getDefaultUser(): Promise<User> {
     let user = await this.userRepo.findOne({ where: { username: 'default' } });
     if (!user) {
-      user = this.userRepo.create({ username: 'default', password: '', email: '' });
+      user = this.userRepo.create({
+        username: 'default',
+        password: '',
+        email: '',
+      });
       user = await this.userRepo.save(user);
     }
     return user;
@@ -216,7 +226,10 @@ export class AppService {
   /**
    * 创建新会话
    */
-  async createConversation(userId: number, title?: string): Promise<Conversation> {
+  async createConversation(
+    userId: number,
+    title?: string,
+  ): Promise<Conversation> {
     const conversation = this.conversationRepo.create({
       userId,
       title: title || '新对话',
@@ -234,6 +247,7 @@ export class AppService {
     images?: string[],
     model?: string,
     attachments?: Attachment[],
+    toolCalls?: ToolCallFrame[],
   ): Promise<Message> {
     const message = this.messageRepo.create({
       conversationId,
@@ -242,6 +256,10 @@ export class AppService {
       images: images && images.length ? images : undefined,
       attachments: attachments && attachments.length ? attachments : undefined,
       model,
+      // 落库时统一改成 done：本轮已结束，历史回显不该再出现「正在执行」
+      toolCalls: toolCalls?.length
+        ? toolCalls.map((t) => ({ ...t, status: 'done' as const }))
+        : undefined,
     });
     return this.messageRepo.save(message);
   }
@@ -316,11 +334,21 @@ export class AppService {
     thinking?: boolean,
     attachments?: Attachment[],
     skills?: string[],
+    userId?: number,
   ): Promise<void> {
     const session = this.sessions.get(sessionId);
     if (!session) {
       callbacks.onError(new Error('Session not found'));
       return;
+    }
+
+    // 会话记忆：必须在保存本次用户消息之前取，否则「最近 N 条」会把当前提问算进去
+    let memory: string | undefined;
+    let history: ChatHistoryMessage[] = [];
+    if (conversationId) {
+      const loaded = await this.memoryService.load(conversationId);
+      memory = loaded.memory;
+      history = loaded.history;
     }
 
     // 如果提供了 conversationId，保存用户消息
@@ -341,6 +369,8 @@ export class AppService {
     const system = this.skillsService.buildSystemPrompt(skills);
     let fullText = '';
     const images: string[] = [];
+    /** 本轮发生过的工具调用（按 id 去重，状态取最后一次） */
+    const toolCalls: ToolCallFrame[] = [];
 
     try {
       await provider.run(
@@ -350,6 +380,9 @@ export class AppService {
           thinking,
           attachments,
           system,
+          userId,
+          history,
+          memory,
         },
         {
           onDelta: async (delta) => {
@@ -369,32 +402,45 @@ export class AppService {
               images.push(...delta.images);
               callbacks.onImages?.(delta.images);
             }
+            // 工具调用状态：同一个 id 只保留最新状态，供前端与历史回显使用
+            if (delta.tool) {
+              const existing = toolCalls.find((t) => t.id === delta.tool!.id);
+              if (existing) existing.status = delta.tool.status;
+              else toolCalls.push({ ...delta.tool });
+              callbacks.onTool?.(delta.tool);
+            }
           },
         },
       );
 
-      if (conversationId && (fullText || images.length)) {
+      if (conversationId && (fullText || images.length || toolCalls.length)) {
         await this.saveMessage(
           conversationId,
           'assistant',
           fullText,
           images,
           modelType,
+          undefined,
+          toolCalls,
         );
       }
       // 会话结束：记录当前时间到 updatedAt
       if (conversationId) await this.touchConversation(conversationId);
+      // 记忆刷新是事后增强，不阻塞本次响应结束（内部已吞掉异常）
+      if (conversationId) void this.memoryService.refresh(conversationId);
 
       callbacks.onDone();
     } catch (e) {
       // 即使异常也尝试保存已有的结果
-      if (conversationId && (fullText || images.length)) {
+      if (conversationId && (fullText || images.length || toolCalls.length)) {
         await this.saveMessage(
           conversationId,
           'assistant',
           fullText,
           images,
           modelType,
+          undefined,
+          toolCalls,
         );
       }
 

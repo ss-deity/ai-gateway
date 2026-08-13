@@ -171,16 +171,17 @@ export class AppController {
 
     const sessionId = this.appService.createSession();
 
+    // 工具产物（如 create_ppt 生成的 .pptx）要落到具体用户的文件目录，
+    // 因此这里始终解析出一个有效用户，而不只是在新建会话时才解析。
+    let user = body.userId
+      ? await this.appService.getUserById(body.userId)
+      : null;
+    if (!user) {
+      user = await this.appService.getDefaultUser();
+    }
+
     let conversationId = body.conversationId;
     if (!conversationId) {
-      const userId = body.userId;
-      let user;
-      if (userId) {
-        user = await this.appService.getUserById(userId);
-      }
-      if (!user) {
-        user = await this.appService.getDefaultUser();
-      }
       const conversation = await this.appService.createConversation(
         user.id,
         body.message.slice(0, 50),
@@ -206,6 +207,11 @@ export class AppController {
             `data: ${JSON.stringify({ choices: [{ delta: { images } }], sessionId, conversationId })}\n\n`,
           );
         },
+        onTool(tool) {
+          res.write(
+            `data: ${JSON.stringify({ choices: [{ delta: { tool } }], sessionId, conversationId })}\n\n`,
+          );
+        },
         onDone() {
           res.write('data: [DONE]\n\n');
           res.end();
@@ -220,6 +226,7 @@ export class AppController {
       body.thinking,
       body.attachments,
       body.skills,
+      user.id,
     );
   }
 
