@@ -172,6 +172,39 @@ export class UploadService {
   }
 
   /**
+   * 上传服务端自己生成的文件（如 create_ppt 产出的 .pptx）。
+   * 与 uploadToBos 的区别：内容是内存里的 Buffer 而非 multer 上传的文件，
+   * 且同名时自动追加 ` (1)` 后缀，避免覆盖用户已有文件。
+   */
+  async uploadBuffer(
+    userId: number,
+    buffer: Buffer,
+    fileName: string,
+    dir?: string,
+  ): Promise<FileEntry> {
+    const uid = await this.resolveUid(userId);
+    const root = this.userFolderPrefix(uid);
+    const dirPrefix = this.dirPrefix(this.normalizeRel(dir));
+    const baseName = this.sanitizeFileName(fileName);
+    const safeName = await this.uniqueFileName(`${root}${dirPrefix}`, baseName);
+    const key = `${root}${dirPrefix}${safeName}`;
+
+    await this.bosClient.putObject(BOS_BUCKET, key, buffer, {
+      'Content-Type': resolveContentType(safeName),
+      'x-bce-acl': 'public-read',
+    });
+
+    return {
+      name: safeName,
+      path: `${dirPrefix}${safeName}`,
+      isDir: false,
+      size: buffer.length,
+      lastModified: Date.now(),
+      url: this.urlOf(key),
+    };
+  }
+
+  /**
    * 上传头像：写入用户目录下的 avatar/ 子目录，并同步 users.avatar 字段
    */
   async uploadAvatar(

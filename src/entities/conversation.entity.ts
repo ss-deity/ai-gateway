@@ -9,6 +9,7 @@ import {
 } from 'typeorm';
 import { User } from './user.entity.js';
 import { Message } from './message.entity.js';
+import type { ConversationMemory } from '../memory/memory.service.js';
 
 @Entity('conversations')
 export class Conversation {
@@ -23,6 +24,10 @@ export class Conversation {
 
   @Column()
   userId!: number;
+
+  /** 会话记忆：摘要 + 稳定事实 + 当前任务，由 MemoryService 维护 */
+  @Column({ type: 'simple-json', nullable: true })
+  memory?: ConversationMemory;
 
   @CreateDateColumn()
   createdAt!: Date;

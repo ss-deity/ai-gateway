@@ -30,6 +30,10 @@ export class Message {
   @Column({ type: 'varchar', length: 64, nullable: true })
   model?: string;
 
+  /** 本条回复过程中发生的工具调用（含最终状态），用于历史回显 */
+  @Column({ type: 'simple-json', nullable: true })
+  toolCalls?: { id: string; name: string; status: 'running' | 'done' }[];
+
   @ManyToOne(() => Conversation, (conversation) => conversation.messages)
   conversation!: Conversation;
 

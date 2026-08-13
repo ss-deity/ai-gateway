@@ -1,11 +1,12 @@
 import { Injectable, Logger } from '@nestjs/common';
 import OpenAI from 'openai';
-import { buildDocumentBlock } from '../attachment-text.js';
+import { runOpenAiChat } from '../openai-chat.js';
 import type {
   ChatContext,
   ModelProvider,
   ProviderCallbacks,
 } from '../model.types.js';
+import { ToolsService } from '../../tools/tools.service.js';
 
 /**
  * openApi：内部 OneAPI 网关（OpenAI 兼容协议）。
@@ -16,8 +17,8 @@ import type {
  *   - 不下发 thinking 参数：聚合网关对该扩展参数的支持不确定，
  *     但若上游模型自己返回 reasoning_content，这里照样透传
  *
- * prompt 结构与 DeepSeek Provider 保持一致：system → 附件正文 → 用户问题，
- * 稳定内容在前，便于上游命中各家的前缀缓存。
+ * 对话主循环、附件拼装与工具调用都复用 `runOpenAiChat`，与 DeepSeek 完全一致：
+ * system → 附件正文 → 用户问题，稳定内容在前，便于上游命中各家的前缀缓存。
  */
 @Injectable()
 export class OpenApiProvider implements ModelProvider {
@@ -34,72 +35,24 @@ export class OpenApiProvider implements ModelProvider {
   /** 实际请求的模型名，需与网关 /v1/models 返回的 id 一致 */
   private readonly model = process.env.OPENAPI_MODEL || 'gpt-5.5';
 
+  constructor(private readonly tools: ToolsService) {}
+
   async run(
     ctx: ChatContext,
     cb: ProviderCallbacks,
   ): Promise<{ text: string; images: string[] }> {
-    let text = '';
+    const result = await runOpenAiChat({
+      client: this.client,
+      model: this.model,
+      ctx,
+      cb,
+      tools: this.tools,
+      logger: this.logger,
+    });
 
-    // 附件处理与 DeepSeek 一致：图片走 vision 块，文本/表格正文由网关内联进 prompt
-    const attachments = ctx.attachments || [];
-    const imageAttachments = attachments.filter((a) =>
-      (a.type || '').startsWith('image/'),
-    );
-    const docAttachments = attachments.filter(
-      (a) => !(a.type || '').startsWith('image/'),
-    );
-
-    const docBlock = await buildDocumentBlock(docAttachments);
-    const textWithDocs = docBlock
-      ? `${docBlock.trim()}\n\n${ctx.message}`
-      : ctx.message;
-
-    let userContent: any = textWithDocs;
-    if (imageAttachments.length) {
-      userContent = [
-        { type: 'text', text: textWithDocs },
-        ...imageAttachments.map((a) => ({
-          type: 'image_url',
-          image_url: { url: a.url },
-        })),
-      ];
-    }
-
-    const messages: any[] = [];
-    if (ctx.system) {
-      messages.push({ role: 'system', content: ctx.system });
-    }
-    messages.push({ role: 'user', content: userContent });
-
-    const stream = await this.client.chat.completions.create(
-      {
-        model: this.model,
-        messages,
-        stream: true,
-      } as any,
-      { signal: ctx.signal },
-    );
-
-    for await (const chunk of stream as any) {
-      if (ctx.signal.aborted) break;
-      const delta = chunk.choices?.[0]?.delta;
-      // 部分上游模型（如 DeepSeek-V4-Pro）会带思考流，透传以便前端展示
-      const reasoning: string | undefined = delta?.reasoning_content;
-      if (reasoning) {
-        text += reasoning;
-        await cb.onDelta({ content: reasoning });
-      }
-      const content: string | undefined = delta?.content;
-      if (content) {
-        text += content;
-        // await：允许上层在暂停时阻塞，实现背压/暂停
-        await cb.onDelta({ content });
-      }
-    }
-
-    if (!text) {
+    if (!result.text) {
       this.logger.warn(`模型 ${this.model} 未返回任何内容`);
     }
-    return { text, images: [] };
+    return result;
   }
 }
