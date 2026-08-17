@@ -698,4 +698,80 @@ export class UploadService {
       await this.bosClient.deleteMultipleObjects(BOS_BUCKET, batch);
     }
   }
+
+  /* ============================ 通用 BOS 工具（供其他模块复用） ============================ */
+
+  /**
+   * 从 BOS 完整 URL 反推 object key。
+   * URL 形如 https://<bucket>.bj.bcebos.com/<url-encoded-key>，也允许携带 query/hash。
+   */
+  parseBosKey(url: string): string {
+    let parsed: URL;
+    try {
+      parsed = new URL(url);
+    } catch {
+      throw new Error('URL 不合法');
+    }
+    if (!/(^|\.)bcebos\.com$/i.test(parsed.hostname)) {
+      throw new Error('URL 不是 BOS 地址');
+    }
+    const key = parsed.pathname
+      .replace(/^\/+/, '')
+      .split('/')
+      .map((seg) => {
+        try {
+          return decodeURIComponent(seg);
+        } catch {
+          return seg;
+        }
+      })
+      .join('/');
+    if (!key) throw new Error('无法从 URL 解析出 BOS key');
+    return key;
+  }
+
+  /** 由 key 反推公开可访问 URL（对外暴露版本） */
+  publicUrlOf(key: string): string {
+    return this.urlOf(key);
+  }
+
+  /** 拉取 BOS 对象为 Buffer */
+  async getObjectAsBuffer(key: string): Promise<Buffer> {
+    const res = await fetch(this.urlOf(key), {
+      redirect: 'follow',
+      signal: AbortSignal.timeout(FETCH_FILE_TIMEOUT_MS),
+    });
+    if (!res.ok) {
+      throw new Error(`读取 BOS 对象失败：HTTP ${res.status}`);
+    }
+    return Buffer.from(await res.arrayBuffer());
+  }
+
+  /** 判断 BOS 对象是否存在（HEAD） */
+  async objectExists(key: string): Promise<boolean> {
+    try {
+      const res = await fetch(this.urlOf(key), {
+        method: 'HEAD',
+        redirect: 'follow',
+        signal: AbortSignal.timeout(FETCH_FILE_TIMEOUT_MS),
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  }
+
+  /** 直接以 public-read 上传对象到指定 key（供 PPT 转图缓存等场景） */
+  async putObjectPublic(
+    key: string,
+    buffer: Buffer,
+    contentType?: string,
+  ): Promise<string> {
+    const ct = contentType || resolveContentType(key);
+    await this.bosClient.putObject(BOS_BUCKET, key, buffer, {
+      'Content-Type': ct,
+      'x-bce-acl': 'public-read',
+    });
+    return this.urlOf(key);
+  }
 }

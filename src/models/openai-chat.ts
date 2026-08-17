@@ -100,6 +100,9 @@ export async function runOpenAiChat(
     await cb.onDelta({ content: chunk });
   };
 
+  /** 已经向前端报过「正在执行」的 tool_call id，避免重复推同一帧 */
+  const announced = new Set<string>();
+
   for (let round = 0; ; round++) {
     const params: any = { model, messages, stream: true, ...extraParams };
     if (toolDefinitions.length) {
@@ -137,6 +140,16 @@ export async function runOpenAiChat(
         if (call.function?.name) cur.name += call.function.name;
         if (call.function?.arguments) cur.args += call.function.arguments;
         pending.set(index, cur);
+
+        // 工具名一到手就先把「正在执行」推给前端。
+        // 模型接下来要把整份参数（如 PPT 的所有页面内容）流式吐完才会进入执行阶段，
+        // 这段时间可能长达十几秒且没有任何文本增量，不先报状态前端就是一片空白。
+        if (cur.name && cur.id && !announced.has(cur.id)) {
+          announced.add(cur.id);
+          await cb.onDelta({
+            tool: { id: cur.id, name: cur.name, status: 'running' },
+          });
+        }
       }
     }
 
@@ -165,6 +178,12 @@ export async function runOpenAiChat(
     for (const call of calls) {
       const args = parseArgs(call.args);
       if (!args) {
+        // 参数不合法时也要把状态收尾，否则前端的「正在执行」会一直转
+        if (announced.has(call.id)) {
+          await cb.onDelta({
+            tool: { id: call.id, name: call.name, status: 'done' },
+          });
+        }
         messages.push({
           role: 'tool',
           tool_call_id: call.id,
@@ -176,16 +195,21 @@ export async function runOpenAiChat(
         continue;
       }
 
-      // 工具状态帧：执行前 running、执行后 done，前端据此渲染「工具调用：xxx」
-      await cb.onDelta({
-        tool: { id: call.id, name: call.name, status: 'running' },
-      });
+      // 参数流式阶段通常已经报过 running 了，这里只兜底补一帧
+      if (!announced.has(call.id)) {
+        announced.add(call.id);
+        await cb.onDelta({
+          tool: { id: call.id, name: call.name, status: 'running' },
+        });
+      }
 
+      const startedAt = Date.now();
       logger.log(`调用工具 ${call.name}`);
       const result = await tools.execute(call.name, args, {
         userId: ctx.userId,
         signal: ctx.signal,
       });
+      logger.log(`工具 ${call.name} 执行完成，耗时 ${Date.now() - startedAt}ms`);
 
       await cb.onDelta({
         tool: { id: call.id, name: call.name, status: 'done' },

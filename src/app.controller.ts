@@ -3,6 +3,9 @@ import type { Response } from 'express';
 import { AppService } from './app.service';
 import type { Attachment } from './models/model.types.js';
 
+/** SSE 心跳间隔：长时间没有增量时保持连接活着 */
+const HEARTBEAT_INTERVAL_MS = 15_000;
+
 @Controller()
 export class AppController {
   constructor(private readonly appService: AppService) {}
@@ -168,6 +171,11 @@ export class AppController {
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
+    // 反向代理（nginx 等）默认会缓冲响应体，SSE 必须显式关掉，否则增量会被攒着一次性下发
+    res.setHeader('X-Accel-Buffering', 'no');
+    // 立刻把响应头发出去：不然浏览器要等到第一个 chunk 才认为请求开始，
+    // 首个 token 之前的等待期（模型思考、工具参数生成）前端完全无感。
+    res.flushHeaders();
 
     const sessionId = this.appService.createSession();
 
@@ -189,9 +197,22 @@ export class AppController {
       conversationId = conversation.id;
     }
 
+    // 心跳：生成 PPT 这类长工具调用期间没有任何增量，
+    // 定时发一行 SSE 注释保持连接活着（前端解析时会忽略非 data: 行）。
+    const heartbeat = setInterval(() => {
+      res.write(': ping\n\n');
+    }, HEARTBEAT_INTERVAL_MS);
+
     res.on('close', () => {
+      clearInterval(heartbeat);
       this.appService.cancelSession(sessionId);
     });
+
+    // 先发一帧「只带 id」的事件：前端据此拿到 sessionId 与 conversationId，
+    // 从而在首个 token 之前就能显示等待状态、也能随时暂停/终止本次生成。
+    res.write(
+      `data: ${JSON.stringify({ choices: [{ delta: {} }], sessionId, conversationId })}\n\n`,
+    );
 
     await this.appService.chatStream(
       sessionId,
@@ -213,10 +234,12 @@ export class AppController {
           );
         },
         onDone() {
+          clearInterval(heartbeat);
           res.write('data: [DONE]\n\n');
           res.end();
         },
         onError(error: Error) {
+          clearInterval(heartbeat);
           res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
           res.end();
         },

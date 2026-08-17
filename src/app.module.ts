@@ -7,6 +7,7 @@ import { ImageModule } from './image/image.module.js';
 import { ModelsModule } from './models/models.module.js';
 import { SkillsModule } from './skills/skills.module.js';
 import { MemoryModule } from './memory/memory.module.js';
+import { PptImagesModule } from './ppt-images/ppt-images.module.js';
 import { User, Conversation, Message } from './entities/index.js';
 
 @Module({
@@ -27,6 +28,7 @@ import { User, Conversation, Message } from './entities/index.js';
     ModelsModule,
     SkillsModule,
     MemoryModule,
+    PptImagesModule,
   ],
   controllers: [AppController],
   providers: [AppService],

@@ -9,6 +9,7 @@ import {
 } from '@nestjs/common';
 import type { Response } from 'express';
 import { UploadService } from './upload.service.js';
+import { PreviewService } from '../preview/preview.service.js';
 
 /**
  * 文件管理接口：列表 / 新建文件夹 / 删除 / 重命名。
@@ -16,7 +17,10 @@ import { UploadService } from './upload.service.js';
  */
 @Controller('files')
 export class FilesController {
-  constructor(private readonly uploadService: UploadService) {}
+  constructor(
+    private readonly uploadService: UploadService,
+    private readonly previewService: PreviewService,
+  ) {}
 
   /**
    * 列出目录下的直接子项
@@ -94,6 +98,55 @@ export class FilesController {
       res.on('close', () => stream.destroy());
       stream.on('error', () => res.destroy());
       stream.pipe(res);
+    } catch (e) {
+      res.status(500).json({ code: -1, message: (e as Error).message });
+    }
+  }
+
+  /**
+   * 会话内文件预览（txt 等文本、pptx 大纲）
+   * GET /files/preview?url=<BOS 文件地址>
+   */
+  @Get('preview')
+  async preview(@Query('url') url?: string) {
+    if (!url) {
+      return { code: -1, message: '缺少 url', data: null };
+    }
+    try {
+      const data = await this.previewService.preview(url);
+      return { code: 0, message: 'success', data };
+    } catch (e) {
+      return { code: -1, message: (e as Error).message, data: null };
+    }
+  }
+
+  /**
+   * 按 URL 代取文件（同源返回，绕开 BOS 未开跨域的限制）
+   * GET /files/raw?url=<BOS 文件地址>&download=1
+   */
+  @Get('raw')
+  async raw(
+    @Res() res: Response,
+    @Query('url') url?: string,
+    @Query('download') download?: string,
+  ) {
+    if (!url) {
+      res.status(400).json({ code: -1, message: '缺少 url' });
+      return;
+    }
+    try {
+      const { buffer, name, contentType } = await this.previewService.load(url);
+      const fallbackName =
+        // eslint-disable-next-line no-control-regex
+        name.replace(/[^\x20-\x7E]/g, '_').replace(/["\\]/g, '_') || 'download';
+      res.setHeader('Content-Type', contentType);
+      res.setHeader('Content-Length', String(buffer.length));
+      res.setHeader(
+        'Content-Disposition',
+        `${download ? 'attachment' : 'inline'}; filename="${fallbackName}"; filename*=UTF-8''${encodeURIComponent(name)}`,
+      );
+      res.setHeader('Access-Control-Expose-Headers', 'Content-Length');
+      res.end(buffer);
     } catch (e) {
       res.status(500).json({ code: -1, message: (e as Error).message });
     }
