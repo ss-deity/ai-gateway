@@ -6,10 +6,12 @@ import { UploadController } from './upload.controller.js';
 import { FilesController } from './files.controller.js';
 import { UploadService } from './upload.service.js';
 import { User } from '../entities/user.entity.js';
+import { PreviewModule } from '../preview/preview.module.js';
 
 @Module({
   imports: [
     TypeOrmModule.forFeature([User]),
+    PreviewModule,
     MulterModule.register({
       storage: memoryStorage(),
       limits: { fileSize: 5 * 1024 * 1024 }, // 5MB

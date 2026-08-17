@@ -71,7 +71,7 @@ function extOf(a: Attachment): string {
  * 按字节截断时，去掉尾部残缺的多字节 UTF-8 序列，
  * 否则最后一个汉字会被解码成替换字符混进正文。
  */
-function trimTruncatedTail(buf: Buffer): Buffer {
+export function trimTruncatedTail(buf: Buffer): Buffer {
   for (let i = buf.length - 1; i >= 0 && i > buf.length - 5; i--) {
     const b = buf[i];
     if ((b & 0xc0) === 0x80) continue; // 续接字节，继续往前找首字节
@@ -85,8 +85,9 @@ function trimTruncatedTail(buf: Buffer): Buffer {
  * 解码正文：按 BOM 识别 UTF-16，其余优先 UTF-8，
  * 出现非法 UTF-8 序列时按 GB18030（兼容 GBK）兜底。
  * Windows 记事本另存的中文 txt 多为 GBK，硬按 UTF-8 读会整篇乱码，模型自然读不懂。
+ * 文件预览（PreviewService）也复用这里的解码逻辑，避免两处编码规则不一致。
  */
-function decodeText(buf: Buffer): string {
+export function decodeText(buf: Buffer): string {
   if (buf.length >= 2) {
     if (buf[0] === 0xff && buf[1] === 0xfe) {
       return new TextDecoder('utf-16le').decode(buf.subarray(2));

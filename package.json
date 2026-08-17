@@ -28,6 +28,7 @@
     "dotenv": "^17.4.2",
     "exceljs": "^4.4.0",
     "jsonwebtoken": "^9.0.3",
+    "jszip": "^3.10.1",
     "multer": "^2.2.0",
     "mysql2": "^3.23.1",
     "openai": "^6.49.0",

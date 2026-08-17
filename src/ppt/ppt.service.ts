@@ -140,19 +140,26 @@ export class PptService {
     addEndingSlide(pptx, theme, language, spec.title);
     pageCount++;
 
+    // 分段计时：排版渲染是纯 CPU、通常几百毫秒，上传走 BOS 网络，
+    // 生成慢的时候看这行日志就知道该优化哪一段。
+    const renderStart = Date.now();
     const buffer = Buffer.from(
       (await pptx.write({ outputType: 'nodebuffer' })) as ArrayBuffer,
     );
+    const renderMs = Date.now() - renderStart;
 
+    const uploadStart = Date.now();
     const entry = await this.uploadService.uploadBuffer(
       userId,
       buffer,
       `${this.safeStem(spec.title)}.pptx`,
       PPT_DIR,
     );
+    const uploadMs = Date.now() - uploadStart;
 
     this.logger.log(
-      `已生成 PPT《${spec.title}》共 ${pageCount} 页 -> ${entry.path}`,
+      `已生成 PPT《${spec.title}》共 ${pageCount} 页 -> ${entry.path}` +
+        `（渲染 ${renderMs}ms，上传 ${uploadMs}ms，${Math.round(entry.size / 1024)}KB）`,
     );
 
     return {
