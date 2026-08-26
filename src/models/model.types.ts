@@ -66,5 +66,5 @@ export interface ModelProvider {
   ): Promise<{ text: string; images: string[] }>;
 }
 
-/** 默认模型 type */
-export const DEFAULT_MODEL_TYPE = 'deepseek-v4';
+/** 默认模型 type（与前端 chatAI/src/config/models.ts 的 DEFAULT_MODEL_TYPE 保持一致） */
+export const DEFAULT_MODEL_TYPE = 'openapi';

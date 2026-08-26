@@ -13,6 +13,8 @@ import { UploadService } from '../upload/upload.service.js';
  * 二次访问命中 manifest 直接返回，不再走一次转换。
  *
  * 依赖：宿主机需已安装 `soffice`（LibreOffice）与 `pdftoppm`（poppler-utils）。
+ * 二进制位置优先取环境变量 SOFFICE_BIN / PDFTOPPM_BIN，否则在常见安装路径中探测
+ * （macOS 上 LibreOffice.app 里的 soffice 默认不在 PATH）。
  * 缓存 key：users/<uid>/PPT/.preview/<pptSafeName>/{manifest.json, page-1.png, ...}
  */
 @Injectable()
@@ -24,6 +26,32 @@ export class PptImagesService {
   private readonly RENDER_DPI = 120;
   /** 允许转换的 PPT 最大体积（20MB） */
   private readonly MAX_PPT_BYTES = 20 * 1024 * 1024;
+
+  /** 外部二进制的候选安装位置（按顺序探测），探测结果做进程内缓存 */
+  private readonly BIN_CANDIDATES: Record<string, string[]> = {
+    soffice: [
+      '/Applications/LibreOffice.app/Contents/MacOS/soffice',
+      '/opt/homebrew/bin/soffice',
+      '/usr/local/bin/soffice',
+      '/usr/bin/soffice',
+      '/usr/bin/libreoffice',
+    ],
+    pdftoppm: [
+      '/opt/homebrew/bin/pdftoppm',
+      '/usr/local/bin/pdftoppm',
+      '/usr/bin/pdftoppm',
+    ],
+  };
+
+  /** 安装指引，缺失时直接给到前端，避免只报一句「未安装」 */
+  private readonly INSTALL_HINT: Record<string, string> = {
+    soffice:
+      'macOS：https://www.libreoffice.org/download 下载安装 LibreOffice；Linux：apt install libreoffice-impress。也可用环境变量 SOFFICE_BIN 指定可执行文件路径。',
+    pdftoppm:
+      'macOS：brew install poppler；Linux：apt install poppler-utils。也可用环境变量 PDFTOPPM_BIN 指定可执行文件路径。',
+  };
+
+  private readonly binCache = new Map<string, string>();
 
   constructor(private readonly uploadService: UploadService) {}
 
@@ -102,9 +130,11 @@ export class PptImagesService {
       await fs.writeFile(pptPath, pptBuffer);
 
       // 1) PPT -> PDF
+      // macOS/多实例下 LibreOffice 会因共享用户配置目录而拒绝启动，故给每次转换一个独立 profile
       await this.run(
-        'soffice',
+        await this.resolveBin('soffice'),
         [
+          `-env:UserInstallation=file://${path.join(tmpDir, 'lo-profile')}`,
           '--headless',
           '--convert-to',
           'pdf',
@@ -116,12 +146,12 @@ export class PptImagesService {
       );
       const pdfPath = path.join(tmpDir, 'input.pdf');
       if (!(await this.exists(pdfPath))) {
-        throw new Error('LibreOffice 未生成 PDF，可能未安装 soffice 或转换失败');
+        throw new Error('LibreOffice 未生成 PDF，转换失败');
       }
 
       // 2) PDF -> PNG（pdftoppm 会生成 page-1.png, page-2.png ...）
       await this.run(
-        'pdftoppm',
+        await this.resolveBin('pdftoppm'),
         ['-png', '-r', String(this.RENDER_DPI), pdfPath, path.join(tmpDir, 'page')],
         this.CONVERT_TIMEOUT_MS,
       );
@@ -131,7 +161,7 @@ export class PptImagesService {
         .filter((n) => /^page-\d+\.png$/.test(n))
         .sort((a, b) => this.pageNumOf(a) - this.pageNumOf(b));
       if (pngFiles.length === 0) {
-        throw new Error('未生成任何页面图片，请检查 pdftoppm 是否已安装');
+        throw new Error('未生成任何页面图片');
       }
 
       // 3) 上传 PNG（并发上传，控制并发数）
@@ -171,6 +201,47 @@ export class PptImagesService {
     } catch {
       return false;
     }
+  }
+
+  /**
+   * 定位外部二进制：环境变量 > 常见安装路径 > 交给 PATH。
+   * 都找不到时直接抛出带安装指引的错误，而不是等 spawn 报 ENOENT。
+   */
+  private async resolveBin(name: 'soffice' | 'pdftoppm'): Promise<string> {
+    const cached = this.binCache.get(name);
+    if (cached) return cached;
+
+    const envVar = name === 'soffice' ? 'SOFFICE_BIN' : 'PDFTOPPM_BIN';
+    const fromEnv = process.env[envVar]?.trim();
+    const candidates = fromEnv
+      ? [fromEnv, ...this.BIN_CANDIDATES[name]]
+      : this.BIN_CANDIDATES[name];
+
+    for (const c of candidates) {
+      if (await this.exists(c)) {
+        this.binCache.set(name, c);
+        return c;
+      }
+    }
+
+    // 兜底：可能装在 PATH 里的其他位置，交给 spawn 试一次
+    if (await this.inPath(name)) {
+      this.binCache.set(name, name);
+      return name;
+    }
+
+    throw new Error(`宿主机未安装 ${name}。${this.INSTALL_HINT[name]}`);
+  }
+
+  /** 用 `command -v` 判断 PATH 中是否存在该命令 */
+  private inPath(name: string): Promise<boolean> {
+    return new Promise((resolve) => {
+      const proc = spawn('/bin/sh', ['-c', `command -v ${name}`], {
+        stdio: 'ignore',
+      });
+      proc.on('error', () => resolve(false));
+      proc.on('close', (code) => resolve(code === 0));
+    });
   }
 
   /**
