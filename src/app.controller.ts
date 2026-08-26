@@ -240,7 +240,22 @@ export class AppController {
         },
         onError(error: Error) {
           clearInterval(heartbeat);
-          res.write(`data: ${JSON.stringify({ error: error.message })}\n\n`);
+          // OpenAI SDK 的 APIError 带 status/code/type，透传给前端做归类
+          // （余额不足 402 / 限流 429 / 鉴权 401 等文案不一致，靠状态码更稳）
+          const api = error as Error & {
+            status?: number;
+            code?: string;
+            type?: string;
+          };
+          res.write(
+            `data: ${JSON.stringify({
+              error: error.message || '模型服务返回错误',
+              status: typeof api.status === 'number' ? api.status : undefined,
+              code: typeof api.code === 'string' ? api.code : undefined,
+              sessionId,
+              conversationId,
+            })}\n\n`,
+          );
           res.end();
         },
       },
