@@ -6,6 +6,7 @@
  */
 
 import type { ChartArtifact } from '../charts/chart.types.js';
+import type { FlowchartArtifact } from '../flowcharts/flowchart.types.js';
 import type { Attachment } from '../models/model.types.js';
 
 /** 工具执行时的上下文（由 chat 链路透传） */
@@ -22,6 +23,11 @@ export interface ToolContext {
    * 因此图表直接走 SSE 下发，模型只拿到一份精简的分析结论。
    */
   onChart?: (chart: ChartArtifact) => void | Promise<void>;
+  /**
+   * 推送流程图产物给前端（与图表同理：布局由前端 G6 完成，模型不需要看到节点坐标）。
+   * 让模型复述节点/连线只会让它再画一份 ASCII 图，因此这里只走 SSE。
+   */
+  onFlowchart?: (flowchart: FlowchartArtifact) => void | Promise<void>;
   /**
    * 推送图片产物给前端（与图片模型直连时同一条 images 增量通道）。
    * 图片地址很长且模型无需复述，因此只把地址推给前端渲染并落库，不回灌上下文。

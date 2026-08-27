@@ -16,6 +16,7 @@ import type {
   ToolCallFrame,
 } from './models/model.types.js';
 import type { ChartArtifact } from './charts/chart.types.js';
+import type { FlowchartArtifact } from './flowcharts/flowchart.types.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-env';
 
@@ -26,6 +27,8 @@ export interface StreamCallbacks {
   onTool?: (tool: ToolCallFrame) => void;
   /** 工具产出的 ECharts 图表 */
   onCharts?: (charts: ChartArtifact[]) => void;
+  /** 工具产出的流程图 */
+  onFlowcharts?: (flowcharts: FlowchartArtifact[]) => void;
   onDone: () => void;
   onError: (error: Error) => void;
 }
@@ -252,6 +255,7 @@ export class AppService {
     attachments?: Attachment[],
     toolCalls?: ToolCallFrame[],
     charts?: ChartArtifact[],
+    flowcharts?: FlowchartArtifact[],
   ): Promise<Message> {
     const message = this.messageRepo.create({
       conversationId,
@@ -265,6 +269,7 @@ export class AppService {
         ? toolCalls.map((t) => ({ ...t, status: 'done' as const }))
         : undefined,
       charts: charts && charts.length ? charts : undefined,
+      flowcharts: flowcharts && flowcharts.length ? flowcharts : undefined,
     });
     return this.messageRepo.save(message);
   }
@@ -378,6 +383,8 @@ export class AppService {
     const toolCalls: ToolCallFrame[] = [];
     /** 本轮工具产出的图表，随消息落库用于历史回显 */
     const charts: ChartArtifact[] = [];
+    /** 本轮工具产出的流程图，随消息落库用于历史回显 */
+    const flowcharts: FlowchartArtifact[] = [];
 
     try {
       await provider.run(
@@ -421,13 +428,22 @@ export class AppService {
               charts.push(...delta.charts);
               callbacks.onCharts?.(delta.charts);
             }
+            // 流程图产物：同上，前端拿到结构后自己布局
+            if (delta.flowcharts && delta.flowcharts.length) {
+              flowcharts.push(...delta.flowcharts);
+              callbacks.onFlowcharts?.(delta.flowcharts);
+            }
           },
         },
       );
 
       if (
         conversationId &&
-        (fullText || images.length || toolCalls.length || charts.length)
+        (fullText ||
+          images.length ||
+          toolCalls.length ||
+          charts.length ||
+          flowcharts.length)
       ) {
         await this.saveMessage(
           conversationId,
@@ -438,6 +454,7 @@ export class AppService {
           undefined,
           toolCalls,
           charts,
+          flowcharts,
         );
       }
       // 会话结束：记录当前时间到 updatedAt
@@ -450,7 +467,11 @@ export class AppService {
       // 即使异常也尝试保存已有的结果
       if (
         conversationId &&
-        (fullText || images.length || toolCalls.length || charts.length)
+        (fullText ||
+          images.length ||
+          toolCalls.length ||
+          charts.length ||
+          flowcharts.length)
       ) {
         await this.saveMessage(
           conversationId,
@@ -461,6 +482,7 @@ export class AppService {
           undefined,
           toolCalls,
           charts,
+          flowcharts,
         );
       }
 

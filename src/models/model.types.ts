@@ -5,6 +5,7 @@
  */
 
 import type { ChartArtifact } from '../charts/chart.types.js';
+import type { FlowchartArtifact } from '../flowcharts/flowchart.types.js';
 
 /** 一次工具调用的展示状态：running=正在执行，done=执行完成 */
 export interface ToolCallFrame {
@@ -15,13 +16,18 @@ export interface ToolCallFrame {
   status: 'running' | 'done';
 }
 
-/** 统一增量数据：文本增量 content、图片结果 images、工具调用状态 tool、图表产物 charts */
+/**
+ * 统一增量数据：文本增量 content、图片结果 images、工具调用状态 tool、
+ * 图表产物 charts、流程图产物 flowcharts
+ */
 export interface UniformDelta {
   content?: string;
   images?: string[];
   tool?: ToolCallFrame;
   /** 工具产出的 ECharts 图表，前端直接渲染（不经模型复述） */
   charts?: ChartArtifact[];
+  /** 工具产出的流程图结构，前端用 G6 布局渲染（不经模型复述） */
+  flowcharts?: FlowchartArtifact[];
 }
 
 export interface ProviderCallbacks {
