@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { CreatePptTool } from './create-ppt.tool.js';
+import { ExcelToEchartsTool } from './excel-to-echarts.tool.js';
+import { GenerateImageTool } from './generate-image.tool.js';
 import type { AgentTool, ToolContext, ToolDefinition } from './tool.types.js';
 
 /**
@@ -11,8 +13,14 @@ export class ToolsService {
   private readonly logger = new Logger(ToolsService.name);
   private readonly tools = new Map<string, AgentTool>();
 
-  constructor(createPpt: CreatePptTool) {
+  constructor(
+    createPpt: CreatePptTool,
+    excelToEcharts: ExcelToEchartsTool,
+    generateImage: GenerateImageTool,
+  ) {
     this.register(createPpt);
+    this.register(excelToEcharts);
+    this.register(generateImage);
   }
 
   register(tool: AgentTool): void {

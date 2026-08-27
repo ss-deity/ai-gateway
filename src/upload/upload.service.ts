@@ -498,8 +498,10 @@ export class UploadService {
 
     const { buffer, mime } = await this.fetchImage(sourceUrl);
     const ext = IMAGE_MIME_EXT[mime] ?? 'png';
+    // 调用方（如服务端出图）往往只知道文件名主干、拿不到真实图片格式，
+    // 因此这里按下载到的 MIME 补后缀。
     const baseName = name
-      ? this.sanitizeFileName(name)
+      ? this.withImageExt(this.sanitizeFileName(name), ext)
       : `AI图片_${this.timestampSuffix()}.${ext}`;
     const fileName = await this.uniqueFileName(`${root}${dirPrefix}`, baseName);
     const key = `${root}${dirPrefix}${fileName}`;
@@ -517,6 +519,14 @@ export class UploadService {
       lastModified: Date.now(),
       url: this.urlOf(key),
     };
+  }
+
+  /** 文件名主干缺少图片后缀时补上（`风景` -> `风景.jpg`） */
+  private withImageExt(name: string, ext: string): string {
+    const current = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
+    return name.includes('.') && IMAGE_EXT_SET.has(current)
+      ? name
+      : `${name}.${ext}`;
   }
 
   /** 生成 `20260729_153012` 形式的时间戳（本地时区），用于默认文件名 */

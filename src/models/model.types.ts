@@ -4,6 +4,8 @@
  * 使上层（控制器/前端）无需感知各家原始返回格式。新增模型只需实现一个 Provider 并注册。
  */
 
+import type { ChartArtifact } from '../charts/chart.types.js';
+
 /** 一次工具调用的展示状态：running=正在执行，done=执行完成 */
 export interface ToolCallFrame {
   /** 模型给出的 tool_call id，前端按它做增量更新 */
@@ -13,11 +15,13 @@ export interface ToolCallFrame {
   status: 'running' | 'done';
 }
 
-/** 统一增量数据：文本增量 content、图片结果 images、工具调用状态 tool */
+/** 统一增量数据：文本增量 content、图片结果 images、工具调用状态 tool、图表产物 charts */
 export interface UniformDelta {
   content?: string;
   images?: string[];
   tool?: ToolCallFrame;
+  /** 工具产出的 ECharts 图表，前端直接渲染（不经模型复述） */
+  charts?: ChartArtifact[];
 }
 
 export interface ProviderCallbacks {

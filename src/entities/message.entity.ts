@@ -6,6 +6,7 @@ import {
   ManyToOne,
 } from 'typeorm';
 import { Conversation } from './conversation.entity.js';
+import type { ChartArtifact } from '../charts/chart.types.js';
 
 @Entity('messages')
 export class Message {
@@ -33,6 +34,13 @@ export class Message {
   /** 本条回复过程中发生的工具调用（含最终状态），用于历史回显 */
   @Column({ type: 'simple-json', nullable: true })
   toolCalls?: { id: string; name: string; status: 'running' | 'done' }[];
+
+  /**
+   * 本条回复产出的 ECharts 图表（如 excel_to_echarts 的结果），用于历史回显。
+   * option 完整存下来，刷新后不必重新解析 Excel。
+   */
+  @Column({ type: 'simple-json', nullable: true })
+  charts?: ChartArtifact[];
 
   @ManyToOne(() => Conversation, (conversation) => conversation.messages)
   conversation!: Conversation;
