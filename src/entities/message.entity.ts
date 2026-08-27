@@ -7,6 +7,7 @@ import {
 } from 'typeorm';
 import { Conversation } from './conversation.entity.js';
 import type { ChartArtifact } from '../charts/chart.types.js';
+import type { FlowchartArtifact } from '../flowcharts/flowchart.types.js';
 
 @Entity('messages')
 export class Message {
@@ -41,6 +42,13 @@ export class Message {
    */
   @Column({ type: 'simple-json', nullable: true })
   charts?: ChartArtifact[];
+
+  /**
+   * 本条回复产出的流程图（generate_flowchart 的结果），用于历史回显。
+   * 只存节点与连线，坐标由前端 G6 每次重新布局。
+   */
+  @Column({ type: 'simple-json', nullable: true })
+  flowcharts?: FlowchartArtifact[];
 
   @ManyToOne(() => Conversation, (conversation) => conversation.messages)
   conversation!: Conversation;

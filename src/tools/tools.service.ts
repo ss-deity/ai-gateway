@@ -1,6 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { CreatePptTool } from './create-ppt.tool.js';
 import { ExcelToEchartsTool } from './excel-to-echarts.tool.js';
+import { GenerateFlowchartTool } from './generate-flowchart.tool.js';
 import { GenerateImageTool } from './generate-image.tool.js';
 import type { AgentTool, ToolContext, ToolDefinition } from './tool.types.js';
 
@@ -17,10 +18,12 @@ export class ToolsService {
     createPpt: CreatePptTool,
     excelToEcharts: ExcelToEchartsTool,
     generateImage: GenerateImageTool,
+    generateFlowchart: GenerateFlowchartTool,
   ) {
     this.register(createPpt);
     this.register(excelToEcharts);
     this.register(generateImage);
+    this.register(generateFlowchart);
   }
 
   register(tool: AgentTool): void {

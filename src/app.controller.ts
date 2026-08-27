@@ -238,6 +238,11 @@ export class AppController {
             `data: ${JSON.stringify({ choices: [{ delta: { charts } }], sessionId, conversationId })}\n\n`,
           );
         },
+        onFlowcharts(flowcharts) {
+          res.write(
+            `data: ${JSON.stringify({ choices: [{ delta: { flowcharts } }], sessionId, conversationId })}\n\n`,
+          );
+        },
         onDone() {
           clearInterval(heartbeat);
           res.write('data: [DONE]\n\n');

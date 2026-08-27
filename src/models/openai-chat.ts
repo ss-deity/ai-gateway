@@ -212,6 +212,8 @@ export async function runOpenAiChat(
         attachments: ctx.attachments,
         // 图表产物直接推给前端渲染，不塞回模型上下文
         onChart: (chart) => cb.onDelta({ charts: [chart] }),
+        // 流程图同理：只把结构下发给前端布局渲染
+        onFlowchart: (flowchart) => cb.onDelta({ flowcharts: [flowchart] }),
         // 图片同理：走统一的 images 增量，前端与直连图片模型时的渲染逻辑一致
         onImage: (urls) => cb.onDelta({ images: urls }),
       });
