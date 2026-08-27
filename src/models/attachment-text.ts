@@ -110,8 +110,9 @@ export function decodeText(buf: Buffer): string {
 
 /**
  * 下载附件二进制内容。URL 由客户端传入，统一走 SSRF 防护。
+ * 导出供图表解析（ExcelChartService）复用，避免两处下载策略不一致。
  */
-async function fetchBuffer(a: Attachment): Promise<Buffer> {
+export async function fetchAttachmentBuffer(a: Attachment): Promise<Buffer> {
   await assertPublicHttpUrl(a.url, '附件地址');
   const res = await fetch(a.url, {
     redirect: 'follow',
@@ -127,7 +128,7 @@ async function fetchBuffer(a: Attachment): Promise<Buffer> {
  */
 async function readOne(a: Attachment): Promise<string | null> {
   try {
-    const buf = await fetchBuffer(a);
+    const buf = await fetchAttachmentBuffer(a);
     // 只取前 MAX_DOC_BYTES 字节，避免把上下文撑爆
     const truncatedByBytes = buf.length > MAX_DOC_BYTES;
     const sliced = truncatedByBytes
@@ -150,7 +151,7 @@ async function readOne(a: Attachment): Promise<string | null> {
 }
 
 /** 单元格值转成一行里的文本：公式取计算结果，富文本取纯文本 */
-function cellText(value: unknown): string {
+export function cellText(value: unknown): string {
   if (value === null || value === undefined) return '';
   if (value instanceof Date) return value.toISOString().slice(0, 10);
   if (typeof value === 'object') {
@@ -180,7 +181,7 @@ function cellText(value: unknown): string {
  */
 async function readExcel(a: Attachment): Promise<string | null> {
   try {
-    const buf = await fetchBuffer(a);
+    const buf = await fetchAttachmentBuffer(a);
     if (buf.length > MAX_EXCEL_BYTES) {
       throw new Error(`超过 ${Math.round(MAX_EXCEL_BYTES / 1024 / 1024)}MB`);
     }

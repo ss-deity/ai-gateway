@@ -1,5 +1,7 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { createHash, createHmac } from 'crypto';
+import type { FileEntry } from '../upload/upload.service.js';
+import { UploadService } from '../upload/upload.service.js';
 
 /**
  * 火山引擎「即梦AI-图片生成」接入（视觉智能 CV 服务，AK/SK V4 签名）。
@@ -27,6 +29,15 @@ const REQ_KEY_CANDIDATES = (process.env.JIMENG_REQ_KEY || 'jimeng_t2i_v40')
   .split(',')
   .map((s) => s.trim())
   .filter(Boolean);
+// 图生图/改图的 req_key 与文生图不同（如 byteedit_v2.0 / jimeng_i2i_v30），
+// 未配置时沿用文生图候选，保持与之前一致的行为。
+const I2I_REQ_KEY_CANDIDATES = (process.env.JIMENG_I2I_REQ_KEY || '')
+  .split(',')
+  .map((s) => s.trim())
+  .filter(Boolean);
+
+/** 生成的图片统一落到「文件管理」的这个目录下 */
+export const CHAT_IMAGE_DIR = 'chat';
 
 interface VisualResponse<T = Record<string, unknown>> {
   code?: number;
@@ -39,6 +50,8 @@ interface VisualResponse<T = Record<string, unknown>> {
 @Injectable()
 export class ImageService {
   private readonly logger = new Logger(ImageService.name);
+
+  constructor(private readonly uploadService: UploadService) {}
 
   private hmac(key: Buffer | string, data: string): Buffer {
     return createHmac('sha256', key).update(data, 'utf8').digest();
@@ -159,6 +172,7 @@ export class ImageService {
 
   /**
    * 提交文生图任务：依次尝试候选 req_key，返回 task_id 与实际生效的 req_key。
+   * 带参考图（image_urls）时优先使用图生图的 req_key 候选。
    * @param prompt 文本描述
    * @param params 透传给接口的其它参数（width/height/scale/seed/use_pre_llm 等）
    */
@@ -166,8 +180,14 @@ export class ImageService {
     prompt: string,
     params: Record<string, unknown>,
   ): Promise<{ taskId: string; reqKey: string }> {
+    const hasRefImages =
+      Array.isArray(params.image_urls) && params.image_urls.length > 0;
+    const candidates =
+      hasRefImages && I2I_REQ_KEY_CANDIDATES.length
+        ? I2I_REQ_KEY_CANDIDATES
+        : REQ_KEY_CANDIDATES;
     let lastErr: Error | null = null;
-    for (const reqKey of REQ_KEY_CANDIDATES) {
+    for (const reqKey of candidates) {
       try {
         const json = await this.signedRequest<{ task_id: string }>(
           'CVSync2AsyncSubmitTask',
@@ -271,5 +291,57 @@ export class ImageService {
 
   private delay(ms: number): Promise<void> {
     return new Promise((resolve) => setTimeout(resolve, ms));
+  }
+
+  /**
+   * 生成图片并转存到该用户「文件管理」的 chat 目录，返回 BOS 地址。
+   *
+   * 即梦返回的是有效期很短的临时 URL，直接落库的话历史会话过一阵就变成裂图，
+   * 因此生成后立刻由服务端下载并写入 BOS，对话里展示的也是转存后的永久地址。
+   * 未登录（拿不到 userId）或转存失败时降级为原始临时地址，至少本次能看到图。
+   *
+   * @param userId 用户数字 id，缺省则不转存
+   * @param nameStem 文件名主干（后缀由转存时探测到的图片格式决定）
+   */
+  async generateAndSave(
+    prompt: string,
+    params: Record<string, unknown> = {},
+    opts: { userId?: number; nameStem?: string } = {},
+  ): Promise<{ images: string[]; files: FileEntry[] }> {
+    const images = await this.generate(prompt, params);
+    if (!opts.userId || !images.length) return { images, files: [] };
+
+    const stem = this.safeFileStem(opts.nameStem || prompt);
+    const urls: string[] = [];
+    const files: FileEntry[] = [];
+    for (const source of images) {
+      try {
+        const entry = await this.uploadService.saveImageFromUrl(
+          opts.userId,
+          source,
+          CHAT_IMAGE_DIR,
+          stem,
+        );
+        urls.push(entry.url!);
+        files.push(entry);
+      } catch (e) {
+        this.logger.warn(
+          `图片转存到 ${CHAT_IMAGE_DIR}/ 失败，回退临时地址：${(e as Error).message}`,
+        );
+        urls.push(source);
+      }
+    }
+    return { images: urls, files };
+  }
+
+  /** 用画面描述当文件名：去掉 BOS 不接受的字符并截断，空则用兜底名 */
+  private safeFileStem(text: string): string {
+    const cleaned = (text || '')
+      .replace(/[\\/<>|*?:"]/g, ' ')
+      .replace(/\s+/g, ' ')
+      .trim()
+      .slice(0, 24)
+      .trim();
+    return cleaned || 'AI图片';
   }
 }

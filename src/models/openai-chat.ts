@@ -208,6 +208,12 @@ export async function runOpenAiChat(
       const result = await tools.execute(call.name, args, {
         userId: ctx.userId,
         signal: ctx.signal,
+        // 工具可能要直接读原始附件（如把 Excel 解析成图表）
+        attachments: ctx.attachments,
+        // 图表产物直接推给前端渲染，不塞回模型上下文
+        onChart: (chart) => cb.onDelta({ charts: [chart] }),
+        // 图片同理：走统一的 images 增量，前端与直连图片模型时的渲染逻辑一致
+        onImage: (urls) => cb.onDelta({ images: urls }),
       });
       logger.log(`工具 ${call.name} 执行完成，耗时 ${Date.now() - startedAt}ms`);
 

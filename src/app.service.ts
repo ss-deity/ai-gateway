@@ -15,6 +15,7 @@ import type {
   ChatHistoryMessage,
   ToolCallFrame,
 } from './models/model.types.js';
+import type { ChartArtifact } from './charts/chart.types.js';
 
 const JWT_SECRET = process.env.JWT_SECRET || 'change-me-in-env';
 
@@ -23,6 +24,8 @@ export interface StreamCallbacks {
   onImages?: (images: string[]) => void;
   /** 工具调用状态变化（正在执行 / 执行完成） */
   onTool?: (tool: ToolCallFrame) => void;
+  /** 工具产出的 ECharts 图表 */
+  onCharts?: (charts: ChartArtifact[]) => void;
   onDone: () => void;
   onError: (error: Error) => void;
 }
@@ -248,6 +251,7 @@ export class AppService {
     model?: string,
     attachments?: Attachment[],
     toolCalls?: ToolCallFrame[],
+    charts?: ChartArtifact[],
   ): Promise<Message> {
     const message = this.messageRepo.create({
       conversationId,
@@ -260,6 +264,7 @@ export class AppService {
       toolCalls: toolCalls?.length
         ? toolCalls.map((t) => ({ ...t, status: 'done' as const }))
         : undefined,
+      charts: charts && charts.length ? charts : undefined,
     });
     return this.messageRepo.save(message);
   }
@@ -371,6 +376,8 @@ export class AppService {
     const images: string[] = [];
     /** 本轮发生过的工具调用（按 id 去重，状态取最后一次） */
     const toolCalls: ToolCallFrame[] = [];
+    /** 本轮工具产出的图表，随消息落库用于历史回显 */
+    const charts: ChartArtifact[] = [];
 
     try {
       await provider.run(
@@ -409,11 +416,19 @@ export class AppService {
               else toolCalls.push({ ...delta.tool });
               callbacks.onTool?.(delta.tool);
             }
+            // 图表产物：直接下发给前端渲染，同时留一份落库
+            if (delta.charts && delta.charts.length) {
+              charts.push(...delta.charts);
+              callbacks.onCharts?.(delta.charts);
+            }
           },
         },
       );
 
-      if (conversationId && (fullText || images.length || toolCalls.length)) {
+      if (
+        conversationId &&
+        (fullText || images.length || toolCalls.length || charts.length)
+      ) {
         await this.saveMessage(
           conversationId,
           'assistant',
@@ -422,6 +437,7 @@ export class AppService {
           modelType,
           undefined,
           toolCalls,
+          charts,
         );
       }
       // 会话结束：记录当前时间到 updatedAt
@@ -432,7 +448,10 @@ export class AppService {
       callbacks.onDone();
     } catch (e) {
       // 即使异常也尝试保存已有的结果
-      if (conversationId && (fullText || images.length || toolCalls.length)) {
+      if (
+        conversationId &&
+        (fullText || images.length || toolCalls.length || charts.length)
+      ) {
         await this.saveMessage(
           conversationId,
           'assistant',
@@ -441,6 +460,7 @@ export class AppService {
           modelType,
           undefined,
           toolCalls,
+          charts,
         );
       }
 
