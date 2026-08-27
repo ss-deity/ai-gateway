@@ -56,6 +56,27 @@ const IMAGE_EXT_SET = new Set([
   'jfif',
 ]);
 
+/**
+ * 可被 @ 引用的文档扩展名白名单。
+ * 与前端 MODEL_UPLOAD_CONFIG 的可选类型对齐；前端未传 exts 时用「图片 + 文档」全集兜底。
+ */
+const DOC_EXT_SET = new Set([
+  'txt',
+  'md',
+  'markdown',
+  'csv',
+  'json',
+  'log',
+  'pdf',
+  'xls',
+  'xlsx',
+  'xlsm',
+  'doc',
+  'docx',
+  'ppt',
+  'pptx',
+]);
+
 /** 远程图片下载超时 */
 const FETCH_IMAGE_TIMEOUT_MS = 30_000;
 
@@ -308,23 +329,28 @@ export class UploadService {
   }
 
   /**
-   * 递归检索该用户「文件管理」下的全部图片文件，供输入框 @ 唤起时选择。
-   * 与 listFiles 不同：跨全部子目录、只返回图片、按名称关键字过滤并限量。
+   * 递归检索该用户「文件管理」下可被 @ 引用的文件（图片 + 文档）。
+   * 与 listFiles 不同：跨全部子目录、按扩展名白名单与文件名关键字过滤并限量。
    *
-   * @param keyword 文件名关键字（不区分大小写），缺省返回最近修改的若干张
+   * @param keyword 文件名关键字（不区分大小写），缺省返回最近修改的若干个
+   * @param exts 允许的扩展名（不带点，不区分大小写）；缺省用「图片 + 文档」全集
    * @param limit 返回条数上限
    */
-  async searchImages(
+  async searchMentionFiles(
     userId: number,
     keyword?: string,
+    exts?: string[],
     limit = 50,
   ): Promise<FileEntry[]> {
     const uid = await this.resolveUid(userId);
     const root = this.userFolderPrefix(uid);
     const objects = await this.listAllObjects(root);
     const kw = (keyword || '').trim().toLowerCase();
+    const allowed = exts?.length
+      ? new Set(exts.map((e) => e.trim().toLowerCase()).filter(Boolean))
+      : new Set([...IMAGE_EXT_SET, ...DOC_EXT_SET]);
 
-    const images: FileEntry[] = [];
+    const files: FileEntry[] = [];
     for (const obj of objects) {
       const rel = obj.key.slice(root.length);
       if (!rel || rel.endsWith('/')) continue;
@@ -333,9 +359,9 @@ export class UploadService {
       // 头像目录不属于用户可见的文件管理内容
       if (rel.startsWith('avatar/')) continue;
       const ext = name.split('.').pop()?.toLowerCase() || '';
-      if (!IMAGE_EXT_SET.has(ext)) continue;
+      if (!allowed.has(ext)) continue;
       if (kw && !name.toLowerCase().includes(kw)) continue;
-      images.push({
+      files.push({
         name,
         path: rel,
         isDir: false,
@@ -346,8 +372,8 @@ export class UploadService {
     }
 
     // 最近修改的优先展示
-    images.sort((a, b) => b.lastModified - a.lastModified);
-    return images.slice(0, Math.max(1, limit));
+    files.sort((a, b) => b.lastModified - a.lastModified);
+    return files.slice(0, Math.max(1, limit));
   }
 
   /**

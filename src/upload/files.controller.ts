@@ -40,21 +40,24 @@ export class FilesController {
   }
 
   /**
-   * 递归检索用户全部图片文件（输入框 @ 选图用）
-   * GET /files/images?userId=<id>&keyword=<文件名关键字>
+   * 递归检索用户可 @ 引用的文件（图片 + 文档，输入框 @ 选文件用）
+   * GET /files/mentions?userId=<id>&keyword=<文件名关键字>&exts=<png,txt,xlsx...>
+   * exts 由前端按当前模型允许的附件类型下发，缺省返回图片 + 文档全集。
    */
-  @Get('images')
-  async listImages(
+  @Get('mentions')
+  async listMentionFiles(
     @Query('userId') userId?: string,
     @Query('keyword') keyword?: string,
+    @Query('exts') exts?: string,
   ) {
     if (!userId) {
       return { code: -1, message: '缺少 userId', data: null };
     }
     try {
-      const list = await this.uploadService.searchImages(
+      const list = await this.uploadService.searchMentionFiles(
         Number(userId),
         keyword,
+        exts ? exts.split(',') : undefined,
       );
       return { code: 0, message: 'success', data: list };
     } catch (e) {
