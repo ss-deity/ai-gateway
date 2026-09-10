@@ -243,6 +243,12 @@ export class AppController {
             `data: ${JSON.stringify({ choices: [{ delta: { flowcharts } }], sessionId, conversationId })}\n\n`,
           );
         },
+        onSaved(saved) {
+          // 回复落库后把 id 与生成时间下发，前端据此显示时间、绑定点赞/点踩/删除
+          res.write(
+            `data: ${JSON.stringify({ choices: [{ delta: { saved } }], sessionId, conversationId })}\n\n`,
+          );
+        },
         onDone() {
           clearInterval(heartbeat);
           res.write('data: [DONE]\n\n');
@@ -296,6 +302,45 @@ export class AppController {
   @Get('conversations/:id/messages')
   async getMessages(@Param('id') id: string) {
     return this.appService.getMessages(Number(id));
+  }
+
+  /**
+   * 点赞/点踩某条回复
+   * PUT /messages/:id/feedback  { feedback: 1 | -1 | 0 }
+   */
+  @Put('messages/:id/feedback')
+  async setMessageFeedback(
+    @Param('id') id: string,
+    @Body() body: { feedback?: number },
+  ) {
+    const feedback = Number(body?.feedback ?? 0);
+    if (![1, 0, -1].includes(feedback)) {
+      return { code: -1, message: 'feedback 只能是 1 / 0 / -1', data: null };
+    }
+    const message = await this.appService.setMessageFeedback(
+      Number(id),
+      feedback,
+    );
+    if (!message) {
+      return { code: -1, message: '消息不存在', data: null };
+    }
+    return {
+      code: 0,
+      message: 'success',
+      data: { id: message.id, feedback: message.feedback },
+    };
+  }
+
+  /**
+   * 删除单条消息
+   */
+  @Delete('messages/:id')
+  async deleteMessage(@Param('id') id: string) {
+    const success = await this.appService.deleteMessage(Number(id));
+    if (!success) {
+      return { code: -1, message: '消息不存在', data: null };
+    }
+    return { code: 0, message: 'success', data: null };
   }
 
   /**

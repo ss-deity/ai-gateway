@@ -29,6 +29,11 @@ export interface StreamCallbacks {
   onCharts?: (charts: ChartArtifact[]) => void;
   /** 工具产出的流程图 */
   onFlowcharts?: (flowcharts: FlowchartArtifact[]) => void;
+  /**
+   * assistant 回复落库完成：下发数据库 id 与生成时间，
+   * 前端据此绑定点赞/点踩/删除，并显示这条回答的时间。
+   */
+  onSaved?: (saved: { messageId: number; createdAt: string }) => void;
   onDone: () => void;
   onError: (error: Error) => void;
 }
@@ -295,6 +300,29 @@ export class AppService {
   }
 
   /**
+   * 设置某条回复的点赞/点踩：1 赞 / -1 踩 / 0 取消
+   */
+  async setMessageFeedback(
+    messageId: number,
+    feedback: number,
+  ): Promise<Message | null> {
+    const message = await this.messageRepo.findOne({
+      where: { id: messageId },
+    });
+    if (!message) return null;
+    message.feedback = feedback;
+    return this.messageRepo.save(message);
+  }
+
+  /**
+   * 删除单条消息（不影响会话本身）
+   */
+  async deleteMessage(messageId: number): Promise<boolean> {
+    const result = await this.messageRepo.delete({ id: messageId });
+    return !!result.affected;
+  }
+
+  /**
    * 删除会话及其所有消息
    */
   async deleteConversation(conversationId: number): Promise<boolean> {
@@ -445,7 +473,7 @@ export class AppService {
           charts.length ||
           flowcharts.length)
       ) {
-        await this.saveMessage(
+        const saved = await this.saveMessage(
           conversationId,
           'assistant',
           fullText,
@@ -456,6 +484,10 @@ export class AppService {
           charts,
           flowcharts,
         );
+        callbacks.onSaved?.({
+          messageId: saved.id,
+          createdAt: saved.createdAt.toISOString(),
+        });
       }
       // 会话结束：记录当前时间到 updatedAt
       if (conversationId) await this.touchConversation(conversationId);
@@ -473,7 +505,7 @@ export class AppService {
           charts.length ||
           flowcharts.length)
       ) {
-        await this.saveMessage(
+        const saved = await this.saveMessage(
           conversationId,
           'assistant',
           fullText,
@@ -484,6 +516,10 @@ export class AppService {
           charts,
           flowcharts,
         );
+        callbacks.onSaved?.({
+          messageId: saved.id,
+          createdAt: saved.createdAt.toISOString(),
+        });
       }
 
       if ((e as Error).name === 'AbortError') {
