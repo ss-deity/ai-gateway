@@ -50,6 +50,10 @@ export class Message {
   @Column({ type: 'simple-json', nullable: true })
   flowcharts?: FlowchartArtifact[];
 
+  /** 用户对该条回复的反馈：1 点赞 / -1 点踩 / 0 未评价，仅 assistant 消息使用 */
+  @Column({ type: 'tinyint', default: 0 })
+  feedback!: number;
+
   @ManyToOne(() => Conversation, (conversation) => conversation.messages)
   conversation!: Conversation;
 
