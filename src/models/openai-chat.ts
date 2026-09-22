@@ -167,7 +167,10 @@ export async function runOpenAiChat(
 
     messages.push({
       role: 'assistant',
-      content: roundText,
+      // 纯取数工具常常不带任何前置文字就直接发起 tool_call，此时 roundText 为空。
+      // 带 tool_calls 的 assistant 消息其 content 应为字符串或 null，空字符串是规范外的
+      // 边界值，部分 OpenAI 兼容网关 / 推理模型会因此报 500，故空文本统一回灌 null。
+      content: roundText || null,
       tool_calls: calls.map((c) => ({
         id: c.id,
         type: 'function',
